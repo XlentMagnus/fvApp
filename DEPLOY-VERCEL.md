@@ -16,6 +16,25 @@ Den här branchen kör appen som en serverless-funktion på Vercel med databasen
 
 ## 1. Skapa databasen hos Turso
 
+### Alternativ A – via Vercels Turso-integration (enklast)
+
+1. Vercel → Storage → skapa en Turso-databas och koppla den till projektet.
+   Vercel sätter då `TURSO_DATABASE_URL` och `TURSO_AUTH_TOKEN` automatiskt.
+2. Hämta variablerna lokalt (filen ignoreras av git):
+   ```bash
+   vercel link
+   vercel env pull .env.development.local
+   ```
+3. Kopiera din lokala databas (struktur + data) till Turso och kör migreringar:
+   ```bash
+   npm run db:copy-to-turso              # torrkörning – visar vad som kopieras
+   npm run db:copy-to-turso -- --apply   # kopierar och verifierar antal rader
+   npm run migrate:turso                 # kör eventuella nyare migreringar mot Turso
+   ```
+   Vill du börja tomt i stället: hoppa över kopieringen och kör bara `npm run migrate:turso`.
+
+### Alternativ B – med Turso CLI
+
 ```bash
 brew install tursodatabase/tap/turso    # eller se docs.turso.tech
 turso auth login

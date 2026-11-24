@@ -7,6 +7,15 @@
  */
 const fs = require('fs');
 const path = require('path');
+// --remote: use the Turso settings pulled with `vercel env pull .env.development.local`
+// (only for this command – the local dev server keeps using db/fv_app.db).
+if (process.argv.includes('--remote')) {
+  require('dotenv').config({ path: path.join(__dirname, '..', '.env.development.local'), override: true });
+  if (!process.env.TURSO_DATABASE_URL && !process.env.DATABASE_URL) {
+    console.error('Hittar ingen TURSO_DATABASE_URL. Kör först: vercel env pull .env.development.local');
+    process.exit(1);
+  }
+}
 const db = require('./connection');
 const config = require('../config');
 

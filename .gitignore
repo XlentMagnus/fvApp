@@ -3,6 +3,9 @@ db/*.db
 db/*.db-wal
 db/*.db-shm
 .env
+.env*
+!.env.example
+.vercel
 sessions/
 *.log
 .DS_Store

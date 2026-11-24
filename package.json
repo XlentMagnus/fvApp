@@ -10,7 +10,9 @@
     "seed": "node db/seed/index.js",
     "setup": "npm run migrate && npm run seed",
     "build:css": "tailwindcss -i ./public/css/input.css -o ./public/css/style.css --minify",
-    "migrate:merge-lift": "node db/scripts/merge-lift-tasks.js"
+    "migrate:merge-lift": "node db/scripts/merge-lift-tasks.js",
+    "migrate:turso": "node db/migrate.js --remote",
+    "db:copy-to-turso": "node db/scripts/copy-to-turso.js"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
