@@ -9,87 +9,86 @@ const ASSIGNMENT_STATUSES = ['assigned', 'accepted', 'declined', 'done'];
 const MAX_COMMENT_LENGTH = 1000;
 
 const taskService = {
-  list(filters) {
+  async list(filters) {
     return taskRepository.findAll(filters);
   },
 
-  getById(id) {
-    const task = taskRepository.findById(id);
+  async getById(id) {
+    const task = await taskRepository.findById(id);
     if (!task) throw httpError(404, 'Uppgift hittades inte');
-    task.assignments = assignmentRepository.findByTask(id);
+    task.assignments = await assignmentRepository.findByTask(id);
     return task;
   },
 
-  create(data, actor) {
-    const task = taskRepository.create(data);
+  async create(data, actor) {
+    const task = await taskRepository.create(data);
     if (data.assignees && data.assignees.length > 0) {
-      assignmentRepository.bulkAssign(task.id, data.assignees);
-      task.assignments = assignmentRepository.findByTask(task.id);
+      task.assignments = await assignmentRepository.bulkAssign(task.id, data.assignees);
       for (const a of task.assignments) {
-        auditRepository.log({ actorKind: 'admin', actor, action: 'assign', task, target: { id: a.user_id, name: a.user_name } });
+        await auditRepository.log({ actorKind: 'admin', actor, action: 'assign', task, target: { id: a.user_id, name: a.user_name } });
       }
       if (task.assignments.length > 0) {
-        taskRepository.update(task.id, { status: 'assigned' });
+        await taskRepository.update(task.id, { status: 'assigned' });
         task.status = 'assigned';
       }
     }
     return task;
   },
 
-  update(id, data) {
-    const existing = taskRepository.findById(id);
+  async update(id, data) {
+    const existing = await taskRepository.findById(id);
     if (!existing) throw httpError(404, 'Uppgift hittades inte');
     return taskRepository.update(id, data);
   },
 
-  delete(id, actor) {
-    const existing = taskRepository.findById(id);
+  async delete(id, actor) {
+    const existing = await taskRepository.findById(id);
     if (!existing) throw httpError(404, 'Uppgift hittades inte');
-    const assigned = assignmentRepository.findByTask(id).map(a => a.user_name);
-    taskRepository.delete(id);
-    auditRepository.log({
+    const assigned = (await assignmentRepository.findByTask(id)).map(a => a.user_name);
+    await taskRepository.delete(id);
+    await auditRepository.log({
       actorKind: 'admin', actor, action: 'task_delete', task: existing,
       details: assigned.length ? `Anmälda: ${assigned.join(', ')}` : null,
     });
     return { success: true };
   },
 
-  getStats() {
+  async getStats() {
     return taskRepository.getStats();
   },
 
-  getByDateRange(from, to) {
+  async getByDateRange(from, to) {
     return taskRepository.findByDateRange(from, to);
   },
 
-  assign(taskId, userIds, actor) {
-    const task = taskRepository.findById(taskId);
+  async assign(taskId, userIds, actor) {
+    const task = await taskRepository.findById(taskId);
     if (!task) throw httpError(404, 'Uppgift hittades inte');
 
-    const before = new Set(assignmentRepository.findByTask(taskId).map(a => a.user_id));
+    const before = new Set((await assignmentRepository.findByTask(taskId)).map(a => a.user_id));
     const ids = userIds.map(Number).filter(Number.isInteger);
-    const assignments = assignmentRepository.bulkAssign(taskId, ids);
+    const assignments = await assignmentRepository.bulkAssign(taskId, ids);
     for (const a of assignments) {
       if (!before.has(a.user_id)) {
-        auditRepository.log({ actorKind: 'admin', actor, action: 'assign', task, target: { id: a.user_id, name: a.user_name } });
+        await auditRepository.log({ actorKind: 'admin', actor, action: 'assign', task, target: { id: a.user_id, name: a.user_name } });
       }
     }
     if (task.status === 'planned' && assignments.length > 0) {
-      taskRepository.update(taskId, { status: 'assigned' });
+      await taskRepository.update(taskId, { status: 'assigned' });
     }
     return assignments;
   },
 
-  unassign(taskId, userId, actor) {
-    const task = taskRepository.findById(taskId);
-    const user = userRepository.findById(userId);
-    const result = assignmentRepository.removeByTaskAndUser(taskId, userId);
+  async unassign(taskId, userId, actor) {
+    const task = await taskRepository.findById(taskId);
+    const user = await userRepository.findById(userId);
+    const result = await assignmentRepository.removeByTaskAndUser(taskId, userId);
     if (result.changes > 0 && task) {
-      auditRepository.log({ actorKind: 'admin', actor, action: 'unassign', task, target: user ? { id: user.id, name: user.name } : { id: userId } });
+      await auditRepository.log({ actorKind: 'admin', actor, action: 'unassign', task, target: user ? { id: user.id, name: user.name } : { id: userId } });
     }
-    const remaining = assignmentRepository.findByTask(taskId);
+    const remaining = await assignmentRepository.findByTask(taskId);
     if (remaining.length === 0 && task && task.status === 'assigned') {
-      taskRepository.update(taskId, { status: 'planned' });
+      await taskRepository.update(taskId, { status: 'planned' });
     }
     return remaining;
   },
@@ -97,8 +96,8 @@ const taskService = {
   /**
    * Members may only update their own assignments; admins may update any.
    */
-  updateAssignment(assignmentId, data, actor) {
-    const assignment = assignmentRepository.findById(assignmentId);
+  async updateAssignment(assignmentId, data, actor) {
+    const assignment = await assignmentRepository.findById(assignmentId);
     if (!assignment) throw httpError(404, 'Tilldelning hittades inte');
     if (actor.role !== 'admin' && assignment.user_id !== actor.id) {
       throw httpError(403, 'Du kan bara ändra dina egna uppgifter');
@@ -112,14 +111,14 @@ const taskService = {
       throw httpError(400, `Kommentaren får vara högst ${MAX_COMMENT_LENGTH} tecken`);
     }
 
-    const updated = assignmentRepository.update(assignmentId, {
+    const updated = await assignmentRepository.update(assignmentId, {
       status,
       comment: comment === undefined ? undefined : (comment === null ? null : String(comment)),
     });
 
     if (status !== undefined && status !== assignment.status) {
-      const task = taskRepository.findById(assignment.task_id);
-      auditRepository.log({
+      const task = await taskRepository.findById(assignment.task_id);
+      await auditRepository.log({
         actorKind: actor.role === 'admin' ? 'admin' : 'user', actor, action: 'assignment_status',
         task: task || { id: assignment.task_id, title: assignment.task_title },
         target: { id: assignment.user_id, name: assignment.user_name },
@@ -129,7 +128,7 @@ const taskService = {
     return updated;
   },
 
-  getUserAssignments(userId, { upcoming, history } = {}) {
+  async getUserAssignments(userId, { upcoming, history } = {}) {
     return assignmentRepository.findByUser(userId, { upcoming, history });
   },
 };

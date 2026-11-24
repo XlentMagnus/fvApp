@@ -1,9 +1,8 @@
+const config = require('./config'); // first: pins the time zone before anything uses Date
 const express = require('express');
-const session = require('express-session');
-const SessionStore = require('./app/middleware/sessionStore')(session);
+const cookieSession = require('cookie-session');
 const morgan = require('morgan');
 const path = require('path');
-const config = require('./config');
 const routes = require('./app/routes');
 const { loadUser } = require('./app/middleware/auth');
 const errorHandler = require('./app/middleware/errorHandler');
@@ -11,7 +10,9 @@ const reminderService = require('./app/services/reminderService');
 
 const app = express();
 
-if (config.trustProxy) app.set('trust proxy', config.trustProxy);
+// Vercel sits behind its own proxy: trust it so req.ip / HTTPS detection work.
+if (config.isVercel) app.set('trust proxy', true);
+else if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 app.disable('x-powered-by');
 
 // Personal member links (?k=...) must never leak to other sites via the Referer header.
@@ -29,25 +30,31 @@ morgan.token('safe-url', (req) => req.originalUrl.replace(/([?&]k=)[^&]+/, '$1**
 app.use(morgan(':remote-addr :method :safe-url :status :res[content-length] - :response-time ms'));
 app.use(express.json({ limit: '100kb' }));
 
-app.use(
-  session({
-    store: new SessionStore({ dir: path.join(__dirname, 'db'), file: 'sessions.db' }),
-    name: 'fv.sid',
-    secret: config.sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: config.isProduction,
-    },
-  })
-);
+// Stateless, signed session cookie – works across serverless instances without a session store.
+app.use(cookieSession({
+  name: 'fv.sid',
+  keys: [config.sessionSecret],
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: config.isProduction || config.isVercel,
+}));
+
+// Vercel Cron: GET /api/cron/reminders with "Authorization: Bearer <CRON_SECRET>".
+app.get('/api/cron/reminders', async (req, res, next) => {
+  try {
+    if (!config.cronSecret || req.get('Authorization') !== `Bearer ${config.cronSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const sent = await reminderService.sendDueReminders();
+    res.json({ sent });
+  } catch (err) { next(err); }
+});
 
 app.use(loadUser);
-// HTML/JS/CSS aren't fingerprinted, so make browsers revalidate them on every load
-// (cheap thanks to ETag/304) – otherwise users keep running old code after an update.
+
+// Static files. On Vercel, public/ is served by the CDN (see vercel.json) and this is
+// only used locally. HTML/JS/CSS aren't fingerprinted, so browsers must revalidate them.
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res, filePath) {
     if (/\.(html|js|css)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
@@ -70,7 +77,13 @@ app.get('*', (req, res) => {
 
 app.use(errorHandler);
 
-app.listen(config.port, () => {
-  console.log(`FV App running on http://localhost:${config.port}`);
-  reminderService.start();
-});
+// Locally: start a server + the 10-minute reminder loop. On Vercel the app is exported
+// as a function and reminders are triggered by Vercel Cron instead.
+if (require.main === module && !config.isVercel) {
+  app.listen(config.port, () => {
+    console.log(`FV App running on http://localhost:${config.port}`);
+    reminderService.start();
+  });
+}
+
+module.exports = app;

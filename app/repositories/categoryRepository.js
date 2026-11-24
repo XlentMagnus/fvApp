@@ -1,20 +1,20 @@
 const db = require('../../db/connection');
 
 const categoryRepository = {
-  findAll() {
-    return db.prepare('SELECT * FROM categories ORDER BY name').all();
+  async findAll() {
+    return db.all('SELECT * FROM categories ORDER BY name');
   },
 
-  findById(id) {
-    return db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
+  async findById(id) {
+    return db.get('SELECT * FROM categories WHERE id = ?', id);
   },
 
-  create({ name, color }) {
-    const result = db.prepare('INSERT INTO categories (name, color) VALUES (?, ?)').run(name, color);
+  async create({ name, color }) {
+    const result = await db.run('INSERT INTO categories (name, color) VALUES (?, ?)', name, color);
     return this.findById(result.lastInsertRowid);
   },
 
-  update(id, { name, color, required_skill }) {
+  async update(id, { name, color, required_skill }) {
     const fields = [];
     const params = [];
     if (required_skill !== undefined) { fields.push('required_skill = ?'); params.push(required_skill || null); }
@@ -22,12 +22,17 @@ const categoryRepository = {
     if (color !== undefined) { fields.push('color = ?'); params.push(color); }
     if (fields.length === 0) return this.findById(id);
     params.push(id);
-    db.prepare(`UPDATE categories SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+    await db.run(`UPDATE categories SET ${fields.join(', ')} WHERE id = ?`, ...params);
     return this.findById(id);
   },
 
-  delete(id) {
-    return db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+  async delete(id) {
+    const results = await db.batch([
+      ['UPDATE tasks SET category_id = NULL WHERE category_id = ?', id],
+      ['UPDATE task_templates SET category_id = NULL WHERE category_id = ?', id],
+      ['DELETE FROM categories WHERE id = ?', id],
+    ]);
+    return results[2];
   },
 };
 

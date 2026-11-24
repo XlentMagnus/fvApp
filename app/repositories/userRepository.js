@@ -14,7 +14,7 @@ function parseUser(row) {
 }
 
 const userRepository = {
-  findAll({ search, role, active } = {}) {
+  async findAll({ search, role, active } = {}) {
     let sql = `SELECT ${USER_COLS} FROM users WHERE 1=1`;
     const params = [];
 
@@ -32,45 +32,40 @@ const userRepository = {
     }
 
     sql += ' ORDER BY familj, name';
-    return db.prepare(sql).all(...params).map(parseUser);
+    return (await db.all(sql, ...params)).map(parseUser);
   },
 
-  findById(id) {
-    return parseUser(
-      db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(id)
-    );
+  async findById(id) {
+    return parseUser(await db.get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, id));
   },
 
-  findByEmail(email) {
+  async findByEmail(email) {
     if (!email) return undefined;
-    return db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(String(email).trim());
+    return db.get('SELECT * FROM users WHERE lower(email) = lower(?)', String(email).trim());
   },
 
-  findByToken(token) {
-    return parseUser(
-      db.prepare(`SELECT ${USER_COLS} FROM users WHERE access_token = ?`).get(token)
-    );
+  async findByToken(token) {
+    return parseUser(await db.get(`SELECT ${USER_COLS} FROM users WHERE access_token = ?`, token));
   },
 
-  regenerateToken(id) {
-    db.prepare("UPDATE users SET access_token = ?, updated_at = datetime('now') WHERE id = ?").run(newToken(), id);
+  async regenerateToken(id) {
+    await db.run("UPDATE users SET access_token = ?, updated_at = datetime('now') WHERE id = ?", newToken(), id);
     return this.findById(id);
   },
 
-  setEmailReminders(id, enabled) {
-    db.prepare("UPDATE users SET email_reminders = ?, updated_at = datetime('now') WHERE id = ?").run(enabled ? 1 : 0, id);
+  async setEmailReminders(id, enabled) {
+    await db.run("UPDATE users SET email_reminders = ?, updated_at = datetime('now') WHERE id = ?", enabled ? 1 : 0, id);
     return this.findById(id);
   },
 
-  countActiveAdmins() {
-    return db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND active = 1").get().count;
+  async countActiveAdmins() {
+    return (await db.get("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND active = 1")).count;
   },
 
-  create({ name, email, phone, password_hash, role = 'user', skoterkort, kan_kiosk, snolaggning, barn, familj, kommentar }) {
-    const result = db.prepare(
+  async create({ name, email, phone, password_hash, role = 'user', skoterkort, kan_kiosk, snolaggning, barn, familj, kommentar }) {
+    const result = await db.run(
       `INSERT INTO users (name, email, phone, password_hash, role, skoterkort, kan_kiosk, snolaggning, barn, familj, kommentar, access_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       name, String(email).trim(), phone || null, password_hash, role,
       skoterkort ? 1 : 0, kan_kiosk ? 1 : 0, snolaggning || 0,
       JSON.stringify(barn || []), familj || null, kommentar || null, newToken()
@@ -78,7 +73,7 @@ const userRepository = {
     return this.findById(result.lastInsertRowid);
   },
 
-  update(id, fields) {
+  async update(id, fields) {
     const sets = [];
     const params = [];
 
@@ -113,20 +108,27 @@ const userRepository = {
     sets.push("updated_at = datetime('now')");
     params.push(id);
 
-    db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...params);
     return this.findById(id);
   },
 
-  delete(id) {
-    return db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  async delete(id) {
+    // Explicit instead of relying on ON DELETE CASCADE / SET NULL being enabled on the server.
+    const results = await db.batch([
+      ['DELETE FROM task_assignments WHERE user_id = ?', id],
+      ['UPDATE tasks SET created_by = NULL WHERE created_by = ?', id],
+      ['UPDATE task_templates SET created_by = NULL WHERE created_by = ?', id],
+      ['DELETE FROM users WHERE id = ?', id],
+    ]);
+    return results[3];
   },
 
-  count() {
-    return db.prepare('SELECT COUNT(*) as count FROM users WHERE active = 1').get().count;
+  async count() {
+    return (await db.get('SELECT COUNT(*) as count FROM users WHERE active = 1')).count;
   },
 
-  getAssignmentStats() {
-    return db.prepare(`
+  async getAssignmentStats() {
+    return db.all(`
       SELECT
         u.id, u.name, u.email, u.phone, u.familj,
         u.skoterkort, u.kan_kiosk, u.snolaggning,
@@ -140,11 +142,11 @@ const userRepository = {
       WHERE u.active = 1
       GROUP BY u.id
       ORDER BY total_assignments DESC, u.name ASC
-    `).all();
+    `);
   },
 
-  getDetailedAssignments(userId) {
-    return db.prepare(`
+  async getDetailedAssignments(userId) {
+    return db.all(`
       SELECT ta.status as assignment_status, ta.comment,
              t.id as task_id, t.title, t.start_datetime, t.end_datetime, t.location, t.status as task_status,
              c.name as category_name, c.color as category_color
@@ -153,7 +155,7 @@ const userRepository = {
       LEFT JOIN categories c ON t.category_id = c.id
       WHERE ta.user_id = ?
       ORDER BY t.start_datetime DESC
-    `).all(userId);
+    `, userId);
   },
 };
 

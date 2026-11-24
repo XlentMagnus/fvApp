@@ -1,17 +1,32 @@
 const db = require('../../db/connection');
 
 const assignmentRepository = {
-  findByTask(taskId) {
-    return db.prepare(`
+  async findByTask(taskId) {
+    return db.all(`
       SELECT ta.*, u.name as user_name, u.email as user_email, u.phone as user_phone, u.skoterkort as user_skoterkort
       FROM task_assignments ta
       JOIN users u ON ta.user_id = u.id
       WHERE ta.task_id = ?
       ORDER BY u.name
-    `).all(taskId);
+    `, taskId);
   },
 
-  findByUser(userId, { upcoming, history } = {}) {
+  /** Assignments for many tasks in one query: Map(task_id -> [assignment]). */
+  async findByTasks(taskIds) {
+    const map = new Map(taskIds.map(id => [id, []]));
+    if (!taskIds.length) return map;
+    const rows = await db.all(`
+      SELECT ta.*, u.name as user_name, u.skoterkort as user_skoterkort
+      FROM task_assignments ta
+      JOIN users u ON ta.user_id = u.id
+      WHERE ta.task_id IN (${taskIds.map(() => '?').join(',')})
+      ORDER BY u.name
+    `, ...taskIds);
+    for (const r of rows) map.get(r.task_id)?.push(r);
+    return map;
+  },
+
+  async findByUser(userId, { upcoming, history } = {}) {
     let sql = `
       SELECT ta.*, t.title, t.description, t.location, t.start_datetime, t.end_datetime,
              t.status as task_status, c.name as category_name, c.color as category_color
@@ -22,9 +37,7 @@ const assignmentRepository = {
     `;
     const params = [userId];
     // Task times are stored as local time ("YYYY-MM-DD HH:MM"), so compare with local now – not UTC.
-    const d = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    const now = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const now = db.nowLocal().slice(0, 16);
 
     if (upcoming) {
       sql += ' AND t.start_datetime >= ?';
@@ -38,43 +51,50 @@ const assignmentRepository = {
       sql += ' ORDER BY t.start_datetime ASC';
     }
 
-    return db.prepare(sql).all(...params);
+    return db.all(sql, ...params);
   },
 
-  findById(id) {
-    return db.prepare(`
+  async findById(id) {
+    return db.get(`
       SELECT ta.*, u.name as user_name, t.title as task_title
       FROM task_assignments ta
       JOIN users u ON ta.user_id = u.id
       JOIN tasks t ON ta.task_id = t.id
       WHERE ta.id = ?
-    `).get(id);
+    `, id);
   },
 
-  create(taskId, userId) {
-    const existing = db.prepare(
-      'SELECT id FROM task_assignments WHERE task_id = ? AND user_id = ?'
-    ).get(taskId, userId);
-    if (existing) return this.findById(existing.id);
-
-    const result = db.prepare(
-      'INSERT INTO task_assignments (task_id, user_id) VALUES (?, ?)'
-    ).run(taskId, userId);
-    return this.findById(result.lastInsertRowid);
+  async create(taskId, userId) {
+    await db.run('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)', taskId, userId);
+    const row = await db.get('SELECT id FROM task_assignments WHERE task_id = ? AND user_id = ?', taskId, userId);
+    return this.findById(row.id);
   },
 
-  bulkAssign(taskId, userIds) {
-    const insert = db.prepare(
-      'INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)'
-    );
-    const tx = db.transaction((ids) => {
-      for (const uid of ids) insert.run(taskId, uid);
-    });
-    tx(userIds);
+  /**
+   * Adds a member only if the task still has a free spot – checked and inserted in
+   * ONE statement, so two people can't grab the last spot at the same time.
+   * Returns the assignment, or null if the task was full.
+   */
+  async createIfSpace(taskId, userId) {
+    const r = await db.run(`
+      INSERT INTO task_assignments (task_id, user_id)
+      SELECT ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM task_assignments WHERE task_id = ? AND user_id = ?)
+        AND (
+          (SELECT slots FROM tasks WHERE id = ?) = 0
+          OR (SELECT COUNT(*) FROM task_assignments WHERE task_id = ?) < (SELECT slots FROM tasks WHERE id = ?)
+        )
+    `, taskId, userId, taskId, userId, taskId, taskId, taskId);
+    if (!r.changes) return null;
+    return this.findById(r.lastInsertRowid);
+  },
+
+  async bulkAssign(taskId, userIds) {
+    await db.batch(userIds.map(uid => ['INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)', taskId, uid]));
     return this.findByTask(taskId);
   },
 
-  update(id, { status, comment }) {
+  async update(id, { status, comment }) {
     const fields = [];
     const params = [];
     if (status !== undefined) { fields.push('status = ?'); params.push(status); }
@@ -83,18 +103,16 @@ const assignmentRepository = {
 
     fields.push("updated_at = datetime('now')");
     params.push(id);
-    db.prepare(`UPDATE task_assignments SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+    await db.run(`UPDATE task_assignments SET ${fields.join(', ')} WHERE id = ?`, ...params);
     return this.findById(id);
   },
 
-  delete(id) {
-    return db.prepare('DELETE FROM task_assignments WHERE id = ?').run(id);
+  async delete(id) {
+    return db.run('DELETE FROM task_assignments WHERE id = ?', id);
   },
 
-  removeByTaskAndUser(taskId, userId) {
-    return db.prepare(
-      'DELETE FROM task_assignments WHERE task_id = ? AND user_id = ?'
-    ).run(taskId, userId);
+  async removeByTaskAndUser(taskId, userId) {
+    return db.run('DELETE FROM task_assignments WHERE task_id = ? AND user_id = ?', taskId, userId);
   },
 };
 
