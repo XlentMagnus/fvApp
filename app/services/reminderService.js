@@ -86,12 +86,11 @@ function reminderEmail(row) {
 function confirmationEmail(member) {
   const url = personalUrl(member.access_token);
   const first = member.name.split(' ')[0];
-  const hours = config.reminderHoursBefore;
   const subject = 'Mejlpåminnelser är påslagna';
   const text = [
     `Hej ${first}!`,
     '',
-    `Nu får du en påminnelse via mejl ungefär ${hours} timmar före varje pass du är anmäld till.`,
+    `Nu får du en påminnelse via mejl ${config.reminderDescription} varje pass du är anmäld till.`,
     '',
     `Kom ihåg: anmälan är bindande. Du kan avanmäla dig senast ${config.unsignMinHours} timmar före passet – därefter måste du kontakta ${config.contactName} och ordna en ersättare.`,
     '',
@@ -99,14 +98,14 @@ function confirmationEmail(member) {
   ].join('\n');
   const html = layout(`
     <p>Hej ${escapeHtml(first)}!</p>
-    <p>Nu får du en påminnelse via mejl ungefär <strong>${hours} timmar</strong> före varje pass du är anmäld till. ✅</p>
+    <p>Nu får du en påminnelse via mejl <strong>${config.reminderDescription}</strong> varje pass du är anmäld till. ✅</p>
     <p style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:10px 12px;border-radius:6px;font-size:14px">⚠️ <strong>Kom ihåg: anmälan är bindande.</strong> Du kan avanmäla dig senast ${config.unsignMinHours} timmar före passet – därefter måste du kontakta ${escapeHtml(config.contactName)} och ordna en ersättare.</p>
     <p><a href="${url}" style="display:inline-block;background:#EAB308;color:#0a0a0a;text-decoration:none;font-weight:600;padding:10px 16px;border-radius:8px">Visa mina pass</a></p>
     <p style="color:#6b7280;font-size:14px">Du kan stänga av påminnelserna när som helst på samma sida.</p>`);
   return { subject, text, html };
 }
 
-const findDue = db.prepare(`
+const FIND_DUE = `
   SELECT ta.id AS assignment_id, u.name AS user_name, u.email, u.access_token,
          t.id AS task_id, t.title, t.description, t.location, t.start_datetime, t.end_datetime,
          c.color AS category_color
@@ -119,8 +118,7 @@ const findDue = db.prepare(`
     AND t.status NOT IN ('cancelled', 'done')
     AND t.start_datetime > ? AND t.start_datetime <= ?
   ORDER BY t.start_datetime
-`);
-const markSent = db.prepare("UPDATE task_assignments SET reminder_sent_at = datetime('now', 'localtime') WHERE id = ?");
+`;
 
 let running = false;
 
@@ -132,10 +130,10 @@ const reminderService = {
     try {
       const now = new Date();
       const until = new Date(now.getTime() + config.reminderHoursBefore * 60 * 60 * 1000);
-      for (const row of findDue.all(localStr(now), localStr(until))) {
+      for (const row of await db.all(FIND_DUE, localStr(now), localStr(until))) {
         try {
           await mailService.send({ to: row.email, ...reminderEmail(row) });
-          markSent.run(row.assignment_id);
+          await db.run('UPDATE task_assignments SET reminder_sent_at = ? WHERE id = ?', db.nowLocal(), row.assignment_id);
           sent++;
         } catch (err) {
           console.error(`[reminders] Kunde inte skicka till ${row.email}: ${err.message}`);

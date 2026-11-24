@@ -5,14 +5,14 @@ const config = require('../../config');
 
 // Seeding DELETES all data. Refuse unless the database is empty or --force is given,
 // and never run in production.
-function guard() {
+async function guard() {
   const force = process.argv.includes('--force');
   if (config.isProduction) {
     console.error('Vägrar seeda: NODE_ENV=production. Seed raderar all data.');
     process.exit(1);
   }
-  const hasData = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get()
-    && db.prepare('SELECT COUNT(*) AS c FROM users').get().c > 0;
+  const hasData = (await db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"))
+    && (await db.get('SELECT COUNT(*) AS c FROM users')).c > 0;
   if (hasData && !force) {
     console.error('Databasen innehåller redan data. Seed raderar ALLT (personer, uppgifter, logg).');
     console.error('Kör "npm run seed -- --force" om du verkligen vill det.');
@@ -21,25 +21,25 @@ function guard() {
 }
 
 async function seed() {
-  guard();
+  await guard();
   console.log('Seeding database...');
 
-  db.pragma('foreign_keys = OFF');
-  db.exec('DELETE FROM task_assignments');
-  db.exec('DELETE FROM tasks');
-  db.exec('DELETE FROM categories');
-  db.exec('DELETE FROM task_templates');
-  db.exec('DELETE FROM users');
-  db.exec('DELETE FROM audit_log');
-  db.exec("DELETE FROM sqlite_sequence");
-  db.pragma('foreign_keys = ON');
+  // Everything goes into one batch = one transaction (all or nothing).
+  const stmts = [
+    ['DELETE FROM task_assignments'],
+    ['DELETE FROM tasks'],
+    ['DELETE FROM task_templates'],
+    ['DELETE FROM categories'],
+    ['DELETE FROM users'],
+    ['DELETE FROM audit_log'],
+    ['DELETE FROM sqlite_sequence'],
+  ];
 
   const hash = await bcrypt.hash('password123', 10);
 
-  const insertUser = db.prepare(
+  const insertUser =
     `INSERT INTO users (name, email, phone, password_hash, role, skoterkort, kan_kiosk, snolaggning, barn, familj, kommentar, access_token)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const users = [
     // Fictional demo data only – never put real members' contact details in the seed.
@@ -55,12 +55,9 @@ async function seed() {
     ['Sofia Eklund', 'sofia.eklund@email.se', '070-0000010', hash, 'user', 0, 1, 0, '["Liam Eklund", "Nova Eklund"]', 'Eklund', null],
   ];
 
-  const insertMany = db.transaction((rows) => {
-    for (const row of rows) insertUser.run(...row, crypto.randomBytes(16).toString('hex'));
-  });
-  insertMany(users);
+  for (const row of users) stmts.push([insertUser, ...row, crypto.randomBytes(16).toString('hex')]);
 
-  const insertCat = db.prepare('INSERT INTO categories (name, color) VALUES (?, ?)');
+  const insertCat = 'INSERT INTO categories (name, color) VALUES (?, ?)';
   const categories = [
     ['Kioskpass', '#ef4444'],
     ['Städning', '#22c55e'],
@@ -69,7 +66,8 @@ async function seed() {
     ['Underhåll', '#8b5cf6'],
     ['Övrigt', '#6b7280'],
   ];
-  for (const c of categories) insertCat.run(...c);
+  for (const c of categories) stmts.push([insertCat, ...c]);
+  stmts.push(["UPDATE categories SET required_skill = 'kan_kiosk' WHERE name = 'Kioskpass'"]);
 
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -77,10 +75,9 @@ async function seed() {
   const addDays = (n) => { const d = new Date(now); d.setDate(d.getDate() + n); return d; };
   const addHours = (d, h) => { const r = new Date(d); r.setHours(r.getHours() + h); return r; };
 
-  const insertTask = db.prepare(
+  const insertTask =
     `INSERT INTO tasks (title, description, location, category_id, start_datetime, end_datetime, status, created_by, slots)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   // [title, desc, location, cat_id, date, hours, status, created_by, slots]
   const taskData = [
@@ -99,12 +96,10 @@ async function seed() {
   for (const t of taskData) {
     const start = fmt(t[4]);
     const end = fmt(addHours(t[4], t[5]));
-    insertTask.run(t[0], t[1], t[2], t[3], start, end, t[6], t[7], t[8]);
+    stmts.push([insertTask, t[0], t[1], t[2], t[3], start, end, t[6], t[7], t[8]]);
   }
 
-  const insertAssign = db.prepare(
-    'INSERT INTO task_assignments (task_id, user_id, status, comment) VALUES (?, ?, ?, ?)'
-  );
+  const insertAssign = 'INSERT INTO task_assignments (task_id, user_id, status, comment) VALUES (?, ?, ?, ?)';
 
   const assignments = [
     [1, 2, 'accepted', 'Jag fixar det!'],
@@ -114,12 +109,11 @@ async function seed() {
     [9, 2, 'done', 'Klart!'],
     [9, 6, 'done', null],
   ];
-  for (const a of assignments) insertAssign.run(...a);
+  for (const a of assignments) stmts.push([insertAssign, ...a]);
 
-  const insertTemplate = db.prepare(
+  const insertTemplate =
     `INSERT INTO task_templates (name, title, description, location, category_id, slots, days, start_time, end_time, created_by, skoterkort_slots, requires_skoterkort)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const templates = [
     ['Kioskpass vardagar', 'Kioskpass', 'Bemanning av kiosken under träning', 'Kiosken A-plan', 1, 2, '[1,3,4]', '17:00', '20:00', 1, 0],
@@ -129,7 +123,9 @@ async function seed() {
     // 2 platser, varav 1 kräver skoterkort
     ['Liftvärd helg', 'Liftvärd', 'Bemanning av liften', 'Slalombacken', 6, 2, '[6,7]', '09:00', '16:00', 7, 1],
   ];
-  for (const t of templates) insertTemplate.run(...t, t[10] > 0 ? 1 : 0);
+  for (const t of templates) stmts.push([insertTemplate, ...t, t[10] > 0 ? 1 : 0]);
+
+  await db.batch(stmts);
 
   console.log('Seed complete.');
   console.log('  Admin login: anna@example.com / password123');

@@ -1,29 +1,29 @@
 const categoryService = require('../services/categoryService');
 
 const categoryController = {
-  list(req, res, next) {
+  async list(req, res, next) {
     try {
-      res.json(categoryService.list());
+      res.json(await categoryService.list());
     } catch (err) { next(err); }
   },
 
-  create(req, res, next) {
+  async create(req, res, next) {
     try {
-      const cat = categoryService.create(req.body);
+      const cat = await categoryService.create(req.body);
       res.status(201).json(cat);
     } catch (err) { next(err); }
   },
 
-  update(req, res, next) {
+  async update(req, res, next) {
     try {
-      const cat = categoryService.update(parseInt(req.params.id), req.body);
+      const cat = await categoryService.update(parseInt(req.params.id), req.body);
       res.json(cat);
     } catch (err) { next(err); }
   },
 
-  delete(req, res, next) {
+  async delete(req, res, next) {
     try {
-      const result = categoryService.delete(parseInt(req.params.id));
+      const result = await categoryService.delete(parseInt(req.params.id));
       res.json(result);
     } catch (err) { next(err); }
   },

@@ -2,15 +2,15 @@ const userService = require('../services/userService');
 const userRepository = require('../repositories/userRepository');
 
 const userController = {
-  list(req, res, next) {
+  async list(req, res, next) {
     try {
-      res.json(userService.list(req.query));
+      res.json(await userService.list(req.query));
     } catch (err) { next(err); }
   },
 
-  getById(req, res, next) {
+  async getById(req, res, next) {
     try {
-      res.json(userService.getById(parseInt(req.params.id, 10)));
+      res.json(await userService.getById(parseInt(req.params.id, 10)));
     } catch (err) { next(err); }
   },
 
@@ -28,27 +28,27 @@ const userController = {
     } catch (err) { next(err); }
   },
 
-  delete(req, res, next) {
+  async delete(req, res, next) {
     try {
-      res.json(userService.delete(parseInt(req.params.id, 10), req.user));
+      res.json(await userService.delete(parseInt(req.params.id, 10), req.user));
     } catch (err) { next(err); }
   },
 
-  regenerateLink(req, res, next) {
+  async regenerateLink(req, res, next) {
     try {
-      res.json(userService.regenerateLink(parseInt(req.params.id, 10), req.user));
+      res.json(await userService.regenerateLink(parseInt(req.params.id, 10), req.user));
     } catch (err) { next(err); }
   },
 
-  assignmentStats(req, res, next) {
+  async assignmentStats(req, res, next) {
     try {
-      res.json(userRepository.getAssignmentStats());
+      res.json(await userRepository.getAssignmentStats());
     } catch (err) { next(err); }
   },
 
-  userAssignments(req, res, next) {
+  async userAssignments(req, res, next) {
     try {
-      res.json(userRepository.getDetailedAssignments(parseInt(req.params.id, 10)));
+      res.json(await userRepository.getDetailedAssignments(parseInt(req.params.id, 10)));
     } catch (err) { next(err); }
   },
 };

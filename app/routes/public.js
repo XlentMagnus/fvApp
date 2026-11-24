@@ -24,15 +24,16 @@ function parseLocal(dt) {
   return dt ? new Date(dt.replace(' ', 'T')) : null;
 }
 
-router.get('/calendar', (req, res, next) => {
+router.get('/calendar', async (req, res, next) => {
   try {
     const { from, to } = req.query;
     if (!from || !to) {
       return res.status(400).json({ error: 'from och to krävs' });
     }
-    const tasks = taskRepository.findByDateRange(String(from), String(to));
+    const tasks = await taskRepository.findByDateRange(String(from), String(to));
+    const byTask = await assignmentRepository.findByTasks(tasks.map(t => t.id));
     for (const t of tasks) {
-      const assignments = assignmentRepository.findByTask(t.id);
+      const assignments = byTask.get(t.id);
       t.assigned_names = assignments.map(a => a.user_name);
       if (req.member) t.is_mine = assignments.some(a => a.user_id === req.member.id);
       delete t.created_by;
@@ -42,10 +43,10 @@ router.get('/calendar', (req, res, next) => {
 });
 
 // Who am I? Returns the member behind the personal link plus their upcoming tasks.
-router.get('/me', requireMember, (req, res, next) => {
+router.get('/me', requireMember, async (req, res, next) => {
   try {
     const m = req.member;
-    const upcoming = assignmentRepository.findByUser(m.id, { upcoming: true }).map(a => ({
+    const upcoming = (await assignmentRepository.findByUser(m.id, { upcoming: true })).map(a => ({
       task_id: a.task_id,
       title: a.title,
       location: a.location,
@@ -67,6 +68,7 @@ router.get('/me', requireMember, (req, res, next) => {
       unsignMinHours: config.unsignMinHours,
       contactName: config.contactName,
       reminderHoursBefore: config.reminderHoursBefore,
+      reminderDescription: config.reminderDescription,
     });
   } catch (err) { next(err); }
 });
@@ -87,13 +89,14 @@ router.post('/me/reminders', requireMember, async (req, res, next) => {
     if (enabled && !m.email) {
       return res.status(400).json({ error: 'Vi saknar din e-postadress. Kontakta föreningen så lägger de till den.' });
     }
-    const updated = userRepository.setEmailReminders(m.id, enabled);
-    auditRepository.log({ actorKind: 'member', actor: m, action: enabled ? 'reminders_on' : 'reminders_off', target: m });
+    const updated = await userRepository.setEmailReminders(m.id, enabled);
+    await auditRepository.log({ actorKind: 'member', actor: m, action: enabled ? 'reminders_on' : 'reminders_off', target: m });
     if (enabled && !m.email_reminders) {
-      // Confirmation mail – don't fail the request if sending fails.
-      reminderService.sendConfirmation(updated).catch(err => console.error('[reminders] Bekräftelse misslyckades:', err.message));
+      // Awaited: on serverless, work left running after the response may be killed.
+      // Failures are logged but don't fail the request.
+      await reminderService.sendConfirmation(updated).catch(err => console.error('[reminders] Bekräftelse misslyckades:', err.message));
       // A session starting soon should get its reminder right away.
-      reminderService.sendDueReminders().catch(() => {});
+      await reminderService.sendDueReminders().catch(err => console.error('[reminders]', err.message));
     }
     res.json({ success: true, email_reminders: enabled });
   } catch (err) { next(err); }
@@ -101,30 +104,33 @@ router.post('/me/reminders', requireMember, async (req, res, next) => {
 
 // Personal calendar feed (subscribe in Apple/Google/Outlook). Calendar apps can't
 // send headers, so the personal key is part of the URL.
-const memberFeedTasks = db.prepare(`
-  SELECT t.*, c.name AS category_name
-  FROM task_assignments ta
-  JOIN tasks t ON t.id = ta.task_id
-  LEFT JOIN categories c ON c.id = t.category_id
-  WHERE ta.user_id = ? AND ta.status != 'declined'
-    AND t.start_datetime >= date('now', 'localtime', '-60 days')
-  ORDER BY t.start_datetime
-`);
+function memberFeedTasks(userId) {
+  const since = new Date(Date.now() - 60 * 24 * 3600 * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return db.all(`
+    SELECT t.*, c.name AS category_name
+    FROM task_assignments ta
+    JOIN tasks t ON t.id = ta.task_id
+    LEFT JOIN categories c ON c.id = t.category_id
+    WHERE ta.user_id = ? AND ta.status != 'declined' AND t.start_datetime >= ?
+    ORDER BY t.start_datetime
+  `, userId, `${since.getFullYear()}-${p(since.getMonth() + 1)}-${p(since.getDate())}`);
+}
 
-router.get('/ical/:token.ics', (req, res, next) => {
+router.get('/ical/:token.ics', async (req, res, next) => {
   try {
     const token = String(req.params.token || '').toLowerCase();
-    const member = /^[a-f0-9]{32}$/.test(token) ? userRepository.findByToken(token) : null;
+    const member = /^[a-f0-9]{32}$/.test(token) ? await userRepository.findByToken(token) : null;
     if (!member || !member.active) return res.status(404).type('text/plain').send('Kalendern hittades inte');
-    const ics = icalService.memberFeed(member, memberFeedTasks.all(member.id));
+    const ics = icalService.memberFeed(member, await memberFeedTasks(member.id));
     res.set('Cache-Control', 'no-cache').type('text/calendar; charset=utf-8').send(ics);
   } catch (err) { next(err); }
 });
 
 // One task as a downloadable .ics file.
-router.get('/tasks/:id(\\d+).ics', (req, res, next) => {
+router.get('/tasks/:id(\\d+).ics', async (req, res, next) => {
   try {
-    const task = taskRepository.findById(parseInt(req.params.id, 10));
+    const task = await taskRepository.findById(parseInt(req.params.id, 10));
     if (!task) return res.status(404).type('text/plain').send('Uppgiften hittades inte');
     const safeName = task.title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().replace(/\s+/g, '-') || 'pass';
     res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}.ics"; filename*=UTF-8''${encodeURIComponent(safeName)}.ics`);
@@ -132,11 +138,11 @@ router.get('/tasks/:id(\\d+).ics', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/tasks/:id', (req, res, next) => {
+router.get('/tasks/:id', async (req, res, next) => {
   try {
-    const task = taskRepository.findById(parseInt(req.params.id, 10));
+    const task = await taskRepository.findById(parseInt(req.params.id, 10));
     if (!task) return res.status(404).json({ error: 'Uppgift hittades inte' });
-    const assignments = assignmentRepository.findByTask(task.id);
+    const assignments = await assignmentRepository.findByTask(task.id);
     // Only names are public – no phone numbers, e-mails or ids.
     task.assignments = assignments.map(a => ({
       user_name: a.user_name,
@@ -152,24 +158,11 @@ router.get('/tasks/:id', (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-const signupTx = db.transaction((task, member) => {
-  if (task.slots > 0) {
-    const current = assignmentRepository.findByTask(task.id);
-    if (current.length >= task.slots) {
-      throw Object.assign(new Error('Alla platser är fyllda'), { status: 400 });
-    }
-  }
-  const assignment = assignmentRepository.create(task.id, member.id);
-  if (task.status === 'planned') {
-    taskRepository.update(task.id, { status: 'assigned' });
-  }
-  return assignment;
-});
 
-router.post('/tasks/:id/signup', requireMember, (req, res, next) => {
+router.post('/tasks/:id/signup', requireMember, async (req, res, next) => {
   try {
     const member = req.member;
-    const task = taskRepository.findById(parseInt(req.params.id, 10));
+    const task = await taskRepository.findById(parseInt(req.params.id, 10));
     if (!task) return res.status(404).json({ error: 'Uppgift hittades inte' });
     if (task.status === 'cancelled' || task.status === 'done') {
       return res.status(400).json({ error: 'Uppgiften är avslutad eller inställd' });
@@ -179,7 +172,7 @@ router.post('/tasks/:id/signup', requireMember, (req, res, next) => {
       return res.status(400).json({ error: 'Passet har redan börjat' });
     }
 
-    const current = assignmentRepository.findByTask(task.id);
+    const current = await assignmentRepository.findByTask(task.id);
     if (current.some(a => a.user_id === member.id)) return res.status(400).json({ error: 'Du är redan anmäld till detta pass' });
 
     // Skoterkort is a soft requirement: someone without it who would take a spot
@@ -195,8 +188,11 @@ router.post('/tasks/:id/signup', requireMember, (req, res, next) => {
       });
     }
 
-    const assignment = signupTx(task, member);
-    auditRepository.log({
+    // Check-and-insert in one statement, so two people can't take the last spot at once.
+    const assignment = await assignmentRepository.createIfSpace(task.id, member.id);
+    if (!assignment) return res.status(400).json({ error: 'Alla platser är fyllda' });
+    if (task.status === 'planned') await taskRepository.update(task.id, { status: 'assigned' });
+    await auditRepository.log({
       actorKind: 'member', actor: member, action: 'signup', task, target: member,
       details: takesSkoterSpot ? 'Tog skoterkortsplats utan skoterkort (bekräftat)' : null,
     });
@@ -205,10 +201,10 @@ router.post('/tasks/:id/signup', requireMember, (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/tasks/:id/unsign', requireMember, (req, res, next) => {
+router.post('/tasks/:id/unsign', requireMember, async (req, res, next) => {
   try {
     const member = req.member;
-    const task = taskRepository.findById(parseInt(req.params.id, 10));
+    const task = await taskRepository.findById(parseInt(req.params.id, 10));
     if (!task) return res.status(404).json({ error: 'Uppgift hittades inte' });
 
     const start = parseLocal(task.start_datetime);
@@ -225,24 +221,24 @@ router.post('/tasks/:id/unsign', requireMember, (req, res, next) => {
       }
     }
 
-    const result = assignmentRepository.removeByTaskAndUser(task.id, member.id);
+    const result = await assignmentRepository.removeByTaskAndUser(task.id, member.id);
     if (result.changes === 0) {
       return res.status(400).json({ error: 'Du är inte anmäld till detta pass' });
     }
-    auditRepository.log({ actorKind: 'member', actor: member, action: 'unsign', task, target: member });
+    await auditRepository.log({ actorKind: 'member', actor: member, action: 'unsign', task, target: member });
 
-    const remaining = assignmentRepository.findByTask(task.id);
+    const remaining = await assignmentRepository.findByTask(task.id);
     if (remaining.length === 0 && task.status === 'assigned') {
-      taskRepository.update(task.id, { status: 'planned' });
+      await taskRepository.update(task.id, { status: 'planned' });
     }
 
     res.json({ success: true });
   } catch (err) { next(err); }
 });
 
-router.get('/stats', (req, res, next) => {
+router.get('/stats', async (req, res, next) => {
   try {
-    res.json(taskRepository.getStats());
+    res.json(await taskRepository.getStats());
   } catch (err) { next(err); }
 });
 

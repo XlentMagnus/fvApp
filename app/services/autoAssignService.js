@@ -53,10 +53,10 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
 }
 
 /** Loads everything needed for planning from the database. */
-function loadState({ from, to, userIds }) {
+async function loadState({ from, to, userIds }) {
   const toEnd = `${to} 23:59:59`;
 
-  const tasks = db.prepare(`
+  const tasks = await db.all(`
     SELECT t.id, t.title, t.location, t.start_datetime, t.end_datetime, t.slots, t.status,
            t.skoterkort_slots, c.required_skill, c.name AS category_name, c.color AS category_color
     FROM tasks t
@@ -65,11 +65,11 @@ function loadState({ from, to, userIds }) {
       AND t.status IN ('planned', 'assigned')
       AND t.start_datetime > ?
     ORDER BY t.start_datetime
-  `).all(from, toEnd, localNow());
+  `, from, toEnd, localNow());
 
-  let users = db.prepare(`
+  let users = await db.all(`
     SELECT id, name, skoterkort, kan_kiosk, snolaggning FROM users WHERE active = 1 ORDER BY name
-  `).all();
+  `);
   if (Array.isArray(userIds)) {
     const wanted = new Set(userIds.map(Number));
     users = users.filter(u => wanted.has(u.id));
@@ -81,9 +81,9 @@ function loadState({ from, to, userIds }) {
   const skoterCovered = new Map(); // task_id -> number of assignees with skoterkort
   const taskIds = tasks.map(t => t.id);
   if (taskIds.length) {
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ta.task_id, ta.user_id, u.skoterkort FROM task_assignments ta JOIN users u ON u.id = ta.user_id
-      WHERE ta.task_id IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds);
+      WHERE ta.task_id IN (${taskIds.map(() => '?').join(',')})`, ...taskIds);
     for (const r of rows) {
       if (!onTask.has(r.task_id)) onTask.set(r.task_id, new Set());
       onTask.get(r.task_id).add(r.user_id);
@@ -96,11 +96,11 @@ function loadState({ from, to, userIds }) {
   const periodLoad = new Map();
   const totalLoad = new Map();
   for (const u of users) { bookings.set(u.id, []); periodLoad.set(u.id, 0); totalLoad.set(u.id, 0); }
-  const existing = db.prepare(`
+  const existing = await db.all(`
     SELECT ta.user_id, t.start_datetime, t.end_datetime
     FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
     WHERE ta.status != 'declined' AND t.status != 'cancelled'
-  `).all();
+  `);
   for (const r of existing) {
     if (!bookings.has(r.user_id)) continue;
     bookings.get(r.user_id).push({ start: r.start_datetime, end: r.end_datetime, taskId: null });
@@ -208,9 +208,9 @@ function rebalance(state, checker, assignments, { maxDepth = 4, maxRounds = 500 
 }
 
 const autoAssignService = {
-  preview({ from, to, user_ids, max_per_day = true }) {
+  async preview({ from, to, user_ids, max_per_day = true }) {
     validateRange(from, to);
-    const state = loadState({ from, to, userIds: user_ids });
+    const state = await loadState({ from, to, userIds: user_ids });
     const checker = makeChecker(state, { maxPerDay: !!max_per_day });
     const before = new Map(state.periodLoad);
 
@@ -301,23 +301,24 @@ const autoAssignService = {
     };
   },
 
-  apply({ from, to, pairs, max_per_day = true }, actor) {
+  async apply({ from, to, pairs, max_per_day = true }, actor) {
     validateRange(from, to);
     if (!Array.isArray(pairs) || pairs.length === 0) throw httpError(400, 'Inga tilldelningar att spara');
     if (pairs.length > 5000) throw httpError(400, 'För många tilldelningar på en gång');
 
-    const insert = db.prepare("INSERT INTO task_assignments (task_id, user_id, status) VALUES (?, ?, 'assigned')");
-    const markAssigned = db.prepare("UPDATE tasks SET status = 'assigned', updated_at = datetime('now') WHERE id = ? AND status = 'planned'");
+    const INSERT = "INSERT OR IGNORE INTO task_assignments (task_id, user_id, status) VALUES (?, ?, 'assigned')";
+    const MARK_ASSIGNED = "UPDATE tasks SET status = 'assigned', updated_at = datetime('now') WHERE id = ? AND status = 'planned'";
 
-    return db.transaction(() => {
+    {
       // Fresh state: everyone, so validation sees the database as it is now.
-      const state = loadState({ from, to });
+      const state = await loadState({ from, to });
       const checker = makeChecker(state, { maxPerDay: !!max_per_day });
       const taskById = new Map(state.tasks.map(t => [t.id, t]));
       const userById = new Map(state.users.map(u => [u.id, u]));
 
       let applied = 0;
       const skipped = [];
+      const statements = [];
       // Skoterkort holders first, so they fill the reserved spots before anyone else.
       const ordered = [...pairs].sort((a, b) => (userById.get(Number(b.user_id))?.skoterkort ? 1 : 0) - (userById.get(Number(a.user_id))?.skoterkort ? 1 : 0));
       for (const p of ordered) {
@@ -335,14 +336,18 @@ const autoAssignService = {
           if (open <= unmet) { skipped.push({ ...p, reason: 'Platsen kräver skoterkort' }); continue; }
         }
 
-        insert.run(task.id, user.id);
-        markAssigned.run(task.id);
+        statements.push(
+          [INSERT, task.id, user.id],
+          [MARK_ASSIGNED, task.id],
+          auditRepository.logStatement({ actorKind: 'admin', actor, action: 'assign', task, target: user, details: 'Automatisk fördelning' }),
+        );
         checker.book(user, task);
-        auditRepository.log({ actorKind: 'admin', actor, action: 'assign', task, target: user, details: 'Automatisk fördelning' });
         applied++;
       }
+      // Everything in one transaction: either all assignments are saved, or none.
+      await db.batch(statements);
       return { applied, skipped };
-    })();
+    }
   },
 };
 

@@ -374,7 +374,7 @@
             <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl" aria-label="Stäng">×</button>
           </div>
           ${m.has_email ? `
-            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">Vi skickar ett mejl till <strong>${esc(m.email_masked)}</strong> ungefär <strong>${Number(me.reminderHoursBefore) || 24} timmar</strong> före varje pass du är anmäld till.</p>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">Vi skickar ett mejl till <strong>${esc(m.email_masked)}</strong> <strong>${esc(me.reminderDescription || 'ungefär 24 timmar före')}</strong> varje pass du är anmäld till.</p>
             <div class="flex gap-2">
               <button class="btn-primary flex-1" onclick="setReminders(true)">Ja, påminn mig</button>
               <button class="btn-secondary" onclick="closeModal()">Avbryt</button>

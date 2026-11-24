@@ -1,29 +1,11 @@
 /**
- * Minimal in-memory limiter for failed login attempts (single-process app,
- * so no external store needed). Counts failures per IP and per e-mail.
+ * Limits failed login attempts per IP and per e-mail. Stored in the database
+ * (table login_failures) because serverless instances don't share memory.
  */
+const db = require('../../db/connection');
+
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 10;
-
-const failures = new Map(); // key -> { count, resetAt }
-
-function hit(key) {
-  const now = Date.now();
-  const entry = failures.get(key);
-  if (!entry || entry.resetAt <= now) {
-    failures.set(key, { count: 1, resetAt: now + WINDOW_MS });
-  } else {
-    entry.count += 1;
-  }
-}
-
-function blockedFor(key) {
-  const entry = failures.get(key);
-  if (!entry) return 0;
-  const now = Date.now();
-  if (entry.resetAt <= now) { failures.delete(key); return 0; }
-  return entry.count >= MAX_FAILURES ? entry.resetAt - now : 0;
-}
 
 function keysFor(req) {
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -31,23 +13,40 @@ function keysFor(req) {
 }
 
 const loginLimiter = {
-  check(req, res, next) {
-    const wait = Math.max(...keysFor(req).map(blockedFor), 0);
-    if (wait > 0) {
-      const minutes = Math.ceil(wait / 60000);
-      res.set('Retry-After', String(Math.ceil(wait / 1000)));
-      return res.status(429).json({ error: `För många misslyckade inloggningar. Försök igen om ${minutes} min.` });
-    }
-    next();
+  async check(req, res, next) {
+    try {
+      const keys = keysFor(req);
+      const now = Date.now();
+      const rows = await db.all(
+        `SELECT count, reset_at FROM login_failures WHERE key IN (${keys.map(() => '?').join(',')}) AND reset_at > ?`,
+        ...keys, now
+      );
+      const blocked = rows.filter(r => r.count >= MAX_FAILURES);
+      if (blocked.length) {
+        const wait = Math.max(...blocked.map(r => r.reset_at - now));
+        res.set('Retry-After', String(Math.ceil(wait / 1000)));
+        return res.status(429).json({ error: `För många misslyckade inloggningar. Försök igen om ${Math.ceil(wait / 60000)} min.` });
+      }
+      next();
+    } catch (err) { next(err); }
   },
-  fail(req) { keysFor(req).forEach(hit); },
-  reset(req) { keysFor(req).forEach(k => failures.delete(k)); },
-};
 
-// Periodically drop expired entries so the map can't grow without bound.
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of failures) if (v.resetAt <= now) failures.delete(k);
-}, WINDOW_MS).unref();
+  async fail(req) {
+    const now = Date.now();
+    await db.batch([
+      ['DELETE FROM login_failures WHERE reset_at <= ?', now],
+      ...keysFor(req).map(k => [
+        `INSERT INTO login_failures (key, count, reset_at) VALUES (?, 1, ?)
+         ON CONFLICT(key) DO UPDATE SET count = count + 1`,
+        k, now + WINDOW_MS,
+      ]),
+    ]);
+  },
+
+  async reset(req) {
+    const keys = keysFor(req);
+    await db.run(`DELETE FROM login_failures WHERE key IN (${keys.map(() => '?').join(',')})`, ...keys);
+  },
+};
 
 module.exports = { loginLimiter };

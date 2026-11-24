@@ -11,30 +11,22 @@ const authController = {
 
       const user = await authService.login(String(email), String(password));
       if (!user) {
-        loginLimiter.fail(req);
+        await loginLimiter.fail(req);
         return res.status(401).json({ error: 'Felaktig e-post eller lösenord' });
       }
-      loginLimiter.reset(req);
+      await loginLimiter.reset(req);
 
-      // New session id on login (prevents session fixation).
-      req.session.regenerate((err) => {
-        if (err) return next(err);
-        req.session.userId = user.id;
-        req.session.save((err2) => {
-          if (err2) return next(err2);
-          res.json({ user });
-        });
-      });
+      // Signed cookie session (cookie-session): a fresh cookie is issued on login.
+      req.session = { userId: user.id };
+      res.json({ user });
     } catch (err) {
       next(err);
     }
   },
 
   logout(req, res) {
-    req.session.destroy(() => {
-      res.clearCookie('fv.sid');
-      res.json({ success: true });
-    });
+    req.session = null;
+    res.json({ success: true });
   },
 
   me(req, res) {

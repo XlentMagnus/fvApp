@@ -16,32 +16,32 @@ function validate({ name, color, required_skill }, isCreate) {
 }
 
 const categoryService = {
-  list() {
+  async list() {
     return categoryRepository.findAll();
   },
 
-  getById(id) {
-    const cat = categoryRepository.findById(id);
+  async getById(id) {
+    const cat = await categoryRepository.findById(id);
     if (!cat) throw Object.assign(new Error('Kategori hittades inte'), { status: 404 });
     return cat;
   },
 
-  create(data) {
+  async create(data) {
     validate(data, true);
     return categoryRepository.create(data);
   },
 
-  update(id, data) {
-    const cat = categoryRepository.findById(id);
+  async update(id, data) {
+    const cat = await categoryRepository.findById(id);
     if (!cat) throw Object.assign(new Error('Kategori hittades inte'), { status: 404 });
     validate(data, false);
     return categoryRepository.update(id, data);
   },
 
-  delete(id) {
-    const cat = categoryRepository.findById(id);
+  async delete(id) {
+    const cat = await categoryRepository.findById(id);
     if (!cat) throw Object.assign(new Error('Kategori hittades inte'), { status: 404 });
-    categoryRepository.delete(id);
+    await categoryRepository.delete(id);
     return { success: true };
   },
 };

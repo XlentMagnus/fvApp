@@ -1,5 +1,9 @@
 require('dotenv').config();
 
+// Task times are stored as Swedish local time. Vercel (and Turso) run in UTC, and TZ
+// can't be set as an env var there, so pin the process time zone here – before any Date is used.
+process.env.TZ = process.env.APP_TIMEZONE || 'Europe/Stockholm';
+
 const DEFAULT_SECRET = 'dev-secret-change-me';
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProduction = nodeEnv === 'production';
@@ -17,7 +21,12 @@ module.exports = {
   sessionSecret,
   nodeEnv,
   isProduction,
-  dbPath: process.env.DB_PATH || './db/fv_app.db',
+  // libSQL URL: Turso in production (libsql://...), a local file in development.
+  databaseUrl: process.env.DATABASE_URL || `file:${process.env.DB_PATH || 'db/fv_app.db'}`,
+  databaseAuthToken: process.env.DATABASE_AUTH_TOKEN || '',
+  // Vercel Cron sends "Authorization: Bearer <CRON_SECRET>".
+  cronSecret: process.env.CRON_SECRET || '',
+  isVercel: !!process.env.VERCEL,
   // Set to the number of reverse proxies in front of the app (e.g. 1 behind nginx/Caddy),
   // so client IPs and HTTPS detection work correctly.
   trustProxy: process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) || process.env.TRUST_PROXY : false,
@@ -38,5 +47,11 @@ module.exports = {
     pass: process.env.SMTP_PASS || '',
     from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@localhost',
   },
-  reminderHoursBefore: parseInt(process.env.REMINDER_HOURS_BEFORE, 10) || 24,
+  // On Vercel Hobby, cron runs once a day: every run sends reminders for sessions in the
+  // next 30 h, so each session gets its reminder roughly the day before.
+  reminderHoursBefore: parseInt(process.env.REMINDER_HOURS_BEFORE, 10) || (process.env.VERCEL ? 30 : 24),
+  reminderSchedule: process.env.REMINDER_SCHEDULE || (process.env.VERCEL ? 'daily' : 'continuous'),
 };
+module.exports.reminderDescription = module.exports.reminderSchedule === 'daily'
+  ? 'dagen innan'
+  : `ungefär ${module.exports.reminderHoursBefore} timmar före`;

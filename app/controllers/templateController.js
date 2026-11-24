@@ -6,49 +6,49 @@ function localDateStr(d) {
 }
 
 const templateController = {
-  list(req, res, next) {
+  async list(req, res, next) {
     try {
-      res.json(templateRepository.findAll());
+      res.json(await templateRepository.findAll());
     } catch (err) { next(err); }
   },
 
-  getById(req, res, next) {
+  async getById(req, res, next) {
     try {
-      const tmpl = templateRepository.findById(parseInt(req.params.id));
+      const tmpl = await templateRepository.findById(parseInt(req.params.id));
       if (!tmpl) return res.status(404).json({ error: 'Mall hittades inte' });
       res.json(tmpl);
     } catch (err) { next(err); }
   },
 
-  create(req, res, next) {
+  async create(req, res, next) {
     try {
       const data = { ...req.body, created_by: req.user.id };
-      const tmpl = templateRepository.create(data);
+      const tmpl = await templateRepository.create(data);
       res.status(201).json(tmpl);
     } catch (err) { next(err); }
   },
 
-  update(req, res, next) {
+  async update(req, res, next) {
     try {
-      const tmpl = templateRepository.findById(parseInt(req.params.id));
+      const tmpl = await templateRepository.findById(parseInt(req.params.id));
       if (!tmpl) return res.status(404).json({ error: 'Mall hittades inte' });
-      const updated = templateRepository.update(tmpl.id, req.body);
+      const updated = await templateRepository.update(tmpl.id, req.body);
       res.json(updated);
     } catch (err) { next(err); }
   },
 
-  delete(req, res, next) {
+  async delete(req, res, next) {
     try {
-      const tmpl = templateRepository.findById(parseInt(req.params.id));
+      const tmpl = await templateRepository.findById(parseInt(req.params.id));
       if (!tmpl) return res.status(404).json({ error: 'Mall hittades inte' });
-      templateRepository.delete(tmpl.id);
+      await templateRepository.delete(tmpl.id);
       res.json({ success: true });
     } catch (err) { next(err); }
   },
 
-  generate(req, res, next) {
+  async generate(req, res, next) {
     try {
-      const tmpl = templateRepository.findById(parseInt(req.params.id));
+      const tmpl = await templateRepository.findById(parseInt(req.params.id));
       if (!tmpl) return res.status(404).json({ error: 'Mall hittades inte' });
 
       const { from, to } = req.body;
@@ -68,7 +68,7 @@ const templateController = {
       const dayMap = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 0 };
       const jsDays = new Set(tmpl.days.map(d => dayMap[d]));
 
-      const created = [];
+      const toCreate = [];
       const current = new Date(startDate);
 
       while (current <= endDate) {
@@ -77,7 +77,7 @@ const templateController = {
           const startDt = `${dateStr} ${tmpl.start_time}`;
           const endDt = `${dateStr} ${tmpl.end_time}`;
 
-          const task = taskRepository.create({
+          toCreate.push({
             title: tmpl.title,
             description: tmpl.description,
             location: tmpl.location,
@@ -89,11 +89,12 @@ const templateController = {
             slots: tmpl.slots,
             skoterkort_slots: tmpl.skoterkort_slots || 0,
           });
-          created.push(task);
         }
         current.setDate(current.getDate() + 1);
       }
 
+      if (toCreate.length > 1000) return res.status(400).json({ error: 'För många pass på en gång (max 1000) – välj en kortare period' });
+      const created = await taskRepository.createMany(toCreate);
       res.json({ created: created.length, tasks: created });
     } catch (err) { next(err); }
   },

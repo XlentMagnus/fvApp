@@ -7,7 +7,7 @@ const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 10);
 
 const authService = {
   async login(email, password) {
-    const user = userRepository.findByEmail(email);
+    const user = await userRepository.findByEmail(email);
     const valid = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
     if (!user || !user.active || !valid) return null;
 

@@ -9,19 +9,23 @@
     "migrate": "node db/migrate.js",
     "seed": "node db/seed/index.js",
     "setup": "npm run migrate && npm run seed",
-    "build:css": "tailwindcss -i ./public/css/input.css -o ./public/css/style.css --minify"
+    "build:css": "tailwindcss -i ./public/css/input.css -o ./public/css/style.css --minify",
+    "migrate:merge-lift": "node db/scripts/merge-lift-tasks.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "bcrypt": "^6.0.0",
-    "better-sqlite3": "^11.7.0",
+    "cookie-session": "^2.1.1",
     "dotenv": "^16.4.7",
     "express": "^4.22.3",
-    "express-session": "^1.18.1",
     "morgan": "^1.10.0",
     "nodemailer": "^10.6.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
     "tailwindcss": "^3.4.17"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
