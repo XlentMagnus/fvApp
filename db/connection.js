@@ -13,10 +13,18 @@
 const { createClient } = require('@libsql/client');
 const config = require('../config');
 
-const client = createClient({
-  url: config.databaseUrl,
-  authToken: config.databaseAuthToken || undefined,
-});
+// Created lazily: a misconfigured URL then fails the request with a clear error
+// instead of crashing the whole function at startup.
+let clientInstance = null;
+function getClient() {
+  if (!clientInstance) {
+    clientInstance = createClient({
+      url: config.databaseUrl,
+      authToken: config.databaseAuthToken || undefined,
+    });
+  }
+  return clientInstance;
+}
 
 // libSQL doesn't accept undefined/booleans as arguments.
 function normaliseArgs(args) {
@@ -32,14 +40,18 @@ function toObjects(result) {
 }
 
 // Foreign keys are per connection in SQLite; enable them once (no-op if already on).
-const ready = client.execute('PRAGMA foreign_keys = ON').catch(() => {});
+let readyPromise = null;
+function ready() {
+  if (!readyPromise) readyPromise = getClient().execute('PRAGMA foreign_keys = ON').catch(() => {});
+  return readyPromise;
+}
 
 const db = {
-  client,
+  get client() { return getClient(); },
 
   async all(sql, ...args) {
-    await ready;
-    return toObjects(await client.execute({ sql, args: normaliseArgs(args) }));
+    await ready();
+    return toObjects(await getClient().execute({ sql, args: normaliseArgs(args) }));
   },
 
   async get(sql, ...args) {
@@ -47,16 +59,16 @@ const db = {
   },
 
   async run(sql, ...args) {
-    await ready;
-    const r = await client.execute({ sql, args: normaliseArgs(args) });
+    await ready();
+    const r = await getClient().execute({ sql, args: normaliseArgs(args) });
     return { changes: r.rowsAffected, lastInsertRowid: r.lastInsertRowid == null ? null : Number(r.lastInsertRowid) };
   },
 
   /** Runs the statements in order inside a single write transaction (all or nothing). */
   async batch(statements) {
-    await ready;
+    await ready();
     if (!statements.length) return [];
-    const results = await client.batch(
+    const results = await getClient().batch(
       statements.map(([sql, ...args]) => ({ sql, args: normaliseArgs(args) })),
       'write'
     );

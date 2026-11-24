@@ -44,8 +44,8 @@ DATABASE_URL=libsql://... DATABASE_AUTH_TOKEN=... npm run migrate
 
 | Variabel | Värde |
 |---|---|
-| `DATABASE_URL` | `libsql://fv-app-<org>.turso.io` |
-| `DATABASE_AUTH_TOKEN` | token från Turso |
+| `DATABASE_URL` | `libsql://fv-app-<org>.turso.io` (Tursos Vercel-integration sätter i stället `TURSO_DATABASE_URL` – fungerar också) |
+| `DATABASE_AUTH_TOKEN` | token från Turso (eller `TURSO_AUTH_TOKEN`) |
 | `SESSION_SECRET` | minst 32 slumpade tecken: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `NODE_ENV` | `production` |
 | `CRON_SECRET` | slumpad sträng (Vercel skickar den till cron-endpointen) |
@@ -53,7 +53,8 @@ DATABASE_URL=libsql://... DATABASE_AUTH_TOKEN=... npm run migrate
 | `CONTACT_NAME` | t.ex. `Förnamn Efternamn` (bemanningsansvarig) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | för mejlpåminnelser (se `.env.example`) |
 
-5. Deploya.
+5. Deploya. **Miljövariabler gäller först efter en ny deploy** (Deployments → ⋯ → Redeploy).
+   Saknas något visar appen en sida som listar exakt vilka variabler som behövs.
 
 ## 3. Mejlpåminnelser (Vercel Cron)
 

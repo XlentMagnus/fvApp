@@ -9,11 +9,25 @@ const nodeEnv = process.env.NODE_ENV || 'development';
 const isProduction = nodeEnv === 'production';
 const sessionSecret = process.env.SESSION_SECRET || DEFAULT_SECRET;
 
-if (isProduction && (sessionSecret === DEFAULT_SECRET || sessionSecret.length < 32)) {
-  throw new Error(
-    'SESSION_SECRET måste sättas till en lång slumpmässig sträng (minst 32 tecken) i produktion. ' +
-    'Generera t.ex. med: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
-  );
+const isVercel = !!process.env.VERCEL;
+// Turso's Vercel integration names the variables TURSO_*; accept both.
+const databaseUrlEnv = process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL || '';
+const databaseAuthToken = process.env.DATABASE_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN || '';
+
+// Configuration problems that make the app unsafe or unable to run. Instead of
+// crashing at startup (which on Vercel only shows FUNCTION_INVOCATION_FAILED),
+// server.js answers every request with a page that lists them.
+const problems = [];
+if ((isProduction || isVercel) && (sessionSecret === DEFAULT_SECRET || sessionSecret.length < 32)) {
+  problems.push('SESSION_SECRET saknas eller är för kort (minst 32 tecken). Generera: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"');
+}
+if (isVercel && !/^(libsql|https|wss?):\/\//.test(databaseUrlEnv)) {
+  problems.push(databaseUrlEnv
+    ? `DATABASE_URL har fel format (${databaseUrlEnv.split(':')[0]}:…) – ska börja med libsql://`
+    : 'DATABASE_URL (eller TURSO_DATABASE_URL) saknas – ska vara Turso-adressen, t.ex. libsql://fv-app-<org>.turso.io');
+}
+if (isVercel && databaseUrlEnv.startsWith('libsql://') && !databaseAuthToken) {
+  problems.push('DATABASE_AUTH_TOKEN (eller TURSO_AUTH_TOKEN) saknas – skapa med: turso db tokens create <databas>');
 }
 
 module.exports = {
@@ -22,11 +36,12 @@ module.exports = {
   nodeEnv,
   isProduction,
   // libSQL URL: Turso in production (libsql://...), a local file in development.
-  databaseUrl: process.env.DATABASE_URL || `file:${process.env.DB_PATH || 'db/fv_app.db'}`,
-  databaseAuthToken: process.env.DATABASE_AUTH_TOKEN || '',
+  databaseUrl: databaseUrlEnv || `file:${require('path').resolve(__dirname, process.env.DB_PATH || 'db/fv_app.db')}`,
+  databaseAuthToken,
+  problems,
   // Vercel Cron sends "Authorization: Bearer <CRON_SECRET>".
   cronSecret: process.env.CRON_SECRET || '',
-  isVercel: !!process.env.VERCEL,
+  isVercel,
   // Set to the number of reverse proxies in front of the app (e.g. 1 behind nginx/Caddy),
   // so client IPs and HTTPS detection work correctly.
   trustProxy: process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) || process.env.TRUST_PROXY : false,

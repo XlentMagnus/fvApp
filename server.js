@@ -15,6 +15,22 @@ if (config.isVercel) app.set('trust proxy', true);
 else if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 app.disable('x-powered-by');
 
+// Missing/unsafe configuration: refuse to run, but say exactly what's wrong (names only,
+// never values) instead of crashing – on Vercel a crash only shows FUNCTION_INVOCATION_FAILED.
+if (config.problems.length) {
+  console.error('[config] Appen kan inte starta:\n  - ' + config.problems.join('\n  - '));
+  app.use((req, res) => {
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    if (req.path.startsWith('/api/')) return res.status(503).json({ error: 'Appen är inte konfigurerad', problems: config.problems });
+    res.status(503).send(`<!doctype html><html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Konfiguration saknas</title></head><body style="font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;line-height:1.5">
+      <h1 style="font-size:1.4rem">⚙️ Appen är inte färdigkonfigurerad</h1>
+      <p>Följande miljövariabler behöver sättas (Vercel → Settings → Environment Variables), och sedan behöver projektet deployas om:</p>
+      <ul>${config.problems.map(p => `<li style="margin-bottom:.5rem"><code>${esc(p)}</code></li>`).join('')}</ul>
+      <p style="color:#666;font-size:.9rem">Se DEPLOY-VERCEL.md i repot för hela guiden.</p></body></html>`);
+  });
+}
+
 // Personal member links (?k=...) must never leak to other sites via the Referer header.
 app.use((req, res, next) => {
   res.set({
