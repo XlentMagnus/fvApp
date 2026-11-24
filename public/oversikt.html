@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="sv" class="">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <title>Översikt – FöreningsVerktyg</title>
+  <link href="/css/style.css" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="fixed top-4 right-4 z-[100] space-y-2"></div>
+
+  <!-- Header -->
+  <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">📋</span>
+        <div>
+          <h1 class="text-lg font-bold leading-tight">FV Alpin - Bemanning</h1>
+          <p class="text-xs text-gray-500 dark:text-gray-400" id="header-sub">Publik översikt</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="dark-toggle" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
+          <svg class="w-5 h-5 dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+          <svg class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+        </button>
+        <button id="my-tasks-btn" class="hidden btn-primary btn-sm whitespace-nowrap" onclick="showMyTasks()">Mina pass</button>
+        <a href="/" id="admin-login-link" class="btn-secondary btn-sm whitespace-nowrap">Admin</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Stats Bar -->
+  <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+    <div class="max-w-6xl mx-auto px-4 py-3">
+      <div class="grid grid-cols-3 gap-4 text-center">
+        <div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">Denna vecka</p>
+          <p class="text-xl font-bold text-club-yellow dark:text-yellow-400" id="stat-week">–</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">Behöver hjälp</p>
+          <p class="text-xl font-bold text-yellow-600 dark:text-yellow-400" id="stat-unassigned">–</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">Slutförda</p>
+          <p class="text-xl font-bold text-green-600 dark:text-green-400" id="stat-done">–</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Member banner -->
+  <div id="member-banner" class="hidden max-w-6xl mx-auto px-4 pt-4 scroll-mt-20"></div>
+
+  <!-- Main Content -->
+  <main class="max-w-6xl mx-auto p-4">
+    <!-- Controls -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
+      <div class="flex items-center gap-2">
+        <div class="flex items-center bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5">
+          <button id="view-month" class="px-3 py-1.5 text-sm rounded-md font-medium transition-colors bg-white dark:bg-gray-600 shadow-sm" onclick="setView('month')">Månad</button>
+          <button id="view-week" class="px-3 py-1.5 text-sm rounded-md font-medium transition-colors" onclick="setView('week')">Vecka</button>
+          <button id="view-list" class="px-3 py-1.5 text-sm rounded-md font-medium transition-colors" onclick="setView('list')">Lista</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="btn-secondary btn-sm" onclick="navPrev()">◀</button>
+        <button class="btn-secondary btn-sm" onclick="navToday()">Idag</button>
+        <button class="btn-secondary btn-sm" onclick="navNext()">▶</button>
+        <span id="nav-label" class="text-sm font-medium ml-2 min-w-[140px]"></span>
+      </div>
+    </div>
+
+    <!-- Calendar / List -->
+    <div id="calendar-container" class="card overflow-hidden"></div>
+  </main>
+
+  <!-- Modal -->
+  <div id="modal-backdrop" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div id="modal-content" class="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"></div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    let currentView = 'month';
+    let currentDate = new Date();
+
+    // -----------------------------------------------------------------------
+    // Personal member link: /oversikt?k=<key>. The key is stored in this
+    // browser and removed from the address bar so it isn't shared by accident.
+    // -----------------------------------------------------------------------
+    const KEY_STORAGE = 'fvMemberKey';
+    let memberKey = null;
+    let me = null; // { member: {id,name,skoterkort}, upcoming: [...] }
+
+    function storageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+    function storageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
+    function storageRemove(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } }
+
+    (function readKeyFromUrl() {
+      const params = new URLSearchParams(location.search);
+      const k = (params.get('k') || '').trim().toLowerCase();
+      if (k) {
+        if (/^[a-f0-9]{32}$/.test(k)) storageSet(KEY_STORAGE, k);
+        memberKey = k;
+        params.delete('k');
+        const qs = params.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      } else {
+        memberKey = storageGet(KEY_STORAGE);
+      }
+    })();
+
+    const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
+      'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December'];
+    const dayNamesShort = ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'];
+    const dayNamesLong = ['Måndag', 'Tisdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lördag', 'Söndag'];
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+    function localDate(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function headers(extra) {
+      const h = { Accept: 'application/json', ...extra };
+      if (memberKey) h['X-Member-Key'] = memberKey;
+      return h;
+    }
+
+    async function api(url) {
+      const res = await fetch(url, { headers: headers() });
+      if (!res.ok) return null;
+      return res.json();
+    }
+
+    async function apiPost(url, body) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw Object.assign(new Error(data?.error || 'Något gick fel'), { code: data?.code, status: res.status });
+      return data;
+    }
+
+    function toast(message, type = 'success') {
+      const container = document.getElementById('toast-container');
+      const colors = { success: 'bg-green-600', error: 'bg-red-600', info: 'bg-club-yellow' };
+      const el = document.createElement('div');
+      el.className = `${colors[type] || colors.info} ${type === 'info' ? 'text-club-black' : 'text-white'} px-4 py-3 rounded-lg shadow-lg text-sm font-medium transform transition-all duration-300 translate-x-full opacity-0`;
+      el.textContent = message;
+      container.appendChild(el);
+      requestAnimationFrame(() => el.classList.remove('translate-x-full', 'opacity-0'));
+      setTimeout(() => {
+        el.classList.add('translate-x-full', 'opacity-0');
+        setTimeout(() => el.remove(), 300);
+      }, message.length > 60 ? 6000 : 3000);
+    }
+
+    async function loadMe() {
+      if (!memberKey) { me = null; renderMemberUi(); return; }
+      const res = await fetch('/api/public/me', { headers: headers() });
+      if (res.status === 401) {
+        // Old or revoked link
+        storageRemove(KEY_STORAGE);
+        memberKey = null;
+        me = null;
+        renderMemberUi('invalid');
+        return;
+      }
+      me = res.ok ? await res.json() : null;
+      renderMemberUi();
+    }
+
+    function renderMemberUi(state) {
+      const banner = document.getElementById('member-banner');
+      const btn = document.getElementById('my-tasks-btn');
+      const sub = document.getElementById('header-sub');
+      if (me) {
+        const first = me.member.name.split(' ')[0];
+        const list = me.upcoming;
+        const visible = showAllMine ? list : list.slice(0, MY_TASKS_PREVIEW);
+        sub.textContent = `Inloggad som ${me.member.name}`;
+        btn.classList.remove('hidden');
+        btn.textContent = `Mina pass (${list.length})`;
+        banner.classList.remove('hidden');
+        banner.innerHTML = `
+          <section class="card overflow-hidden" aria-labelledby="my-tasks-heading">
+            <div class="px-4 py-3 bg-yellow-50 dark:bg-club-black/40 border-b border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+              <h2 id="my-tasks-heading" class="font-semibold">👋 Hej ${esc(first)}! ${list.length
+                ? `Du är anmäld till <span class="text-club-black dark:text-club-yellow">${list.length} kommande pass</span>`
+                : 'Du är inte anmäld till något kommande pass'}</h2>
+              <button class="text-xs text-gray-500 dark:text-gray-400 hover:underline self-start sm:self-auto" onclick="forgetMe()">Inte ${esc(first)}? Glöm mig på den här enheten</button>
+            </div>
+            <div class="px-4 pt-4 pb-1">
+              <div class="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5 text-sm text-amber-900 dark:text-amber-200">
+                <strong>Kom ihåg!</strong> Du kan avanmäla dig senast ${unsignHours()} timmar före passet. Därefter: kontakta <strong>${esc(contactName())}</strong> och ordna en ersättare.
+              </div>
+            </div>
+            ${list.length === 0 ? `
+              <p class="px-4 py-6 text-sm text-gray-500 dark:text-gray-400 text-center">Klicka på ett pass i kalendern nedan för att anmäla dig. 🙌</p>
+            ` : `
+              <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+                ${visible.map(myTaskRow).join('')}
+              </ul>
+              <div class="px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>Klicka på ett pass för detaljer.</span>
+                ${list.length > MY_TASKS_PREVIEW ? `<button class="font-medium text-gray-700 dark:text-gray-200 hover:underline flex-shrink-0" onclick="toggleAllMine()">${showAllMine ? 'Visa färre' : `Visa alla ${list.length}`}</button>` : ''}
+              </div>
+            `}
+            <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 flex flex-col sm:flex-row gap-2">
+              <button class="btn-secondary btn-sm justify-center" onclick="openCalendarModal()">📅 Lägg till i min kalender</button>
+              ${me.member.email_reminders ? `
+                <div class="flex items-center justify-center sm:justify-start gap-2 text-sm">
+                  <span class="text-green-700 dark:text-green-400 font-medium">✓ Du får påminnelser via mejl</span>
+                  <button class="text-xs text-gray-500 dark:text-gray-400 hover:underline" onclick="setReminders(false)">Stäng av</button>
+                </div>
+              ` : `
+                <button class="btn-primary btn-sm justify-center" onclick="openReminderModal()">✉️ Vill du ha en påminnelse via mejl? Klicka här!</button>
+              `}
+            </div>
+          </section>`;
+      } else {
+        sub.textContent = 'Publik översikt';
+        btn.classList.add('hidden');
+        banner.classList.remove('hidden');
+        banner.innerHTML = state === 'invalid'
+          ? `<div class="card px-4 py-3 border-red-300 dark:border-red-800"><p class="text-sm text-red-600 dark:text-red-400">Länken du använde är inte längre giltig. Be föreningen om en ny personlig länk.</p></div>`
+          : `<div class="card px-4 py-3"><p class="text-sm text-gray-600 dark:text-gray-400">🔗 Vill du anmäla dig till ett pass? Öppna din <strong>personliga länk</strong> som du fått från föreningen via SMS eller e-post.</p></div>`;
+      }
+    }
+
+    window.forgetMe = function () {
+      if (!confirm('Vill du att den här enheten glömmer vem du är? Du behöver din personliga länk igen för att anmäla dig.')) return;
+      storageRemove(KEY_STORAGE);
+      memberKey = null;
+      me = null;
+      renderMemberUi();
+      renderView();
+    };
+
+    const MY_TASKS_PREVIEW = 5;
+    let showAllMine = false;
+
+    // "Idag", "Imorgon", "Om 3 dagar" … relative to the local calendar day.
+    function relativeDay(dt) {
+      const d = new Date(dt.replace(' ', 'T'));
+      const startOf = x => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+      const days = Math.round((startOf(d) - startOf(new Date())) / 86400000);
+      if (days <= 0) return { label: 'Idag', cls: 'bg-club-yellow text-club-black' };
+      if (days === 1) return { label: 'Imorgon', cls: 'bg-yellow-100 text-club-black dark:bg-yellow-900/60 dark:text-yellow-200' };
+      if (days < 7) return { label: `Om ${days} dagar`, cls: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' };
+      return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Late-cancellation rule (enforced on the server too)
+    // -----------------------------------------------------------------------
+    function unsignHours() { return Number(me?.unsignMinHours) || 24; }
+    function contactName() { return me?.contactName || 'ansvarig i föreningen'; }
+
+    function unsignDeadline(start) {
+      if (!start) return null;
+      return new Date(new Date(start.replace(' ', 'T')).getTime() - unsignHours() * 3600 * 1000);
+    }
+
+    // True when the session hasn't started yet but it's too late to unregister.
+    function isUnsignLocked(start) {
+      if (!start) return false;
+      const now = new Date();
+      return now >= unsignDeadline(start) && now < new Date(start.replace(' ', 'T'));
+    }
+
+    function fmtDeadline(d) {
+      if (!d) return '';
+      const day = d.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long' });
+      return `${day} kl. ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    function myTaskRow(t) {
+      const d = new Date(t.start_datetime.replace(' ', 'T'));
+      const rel = relativeDay(t.start_datetime);
+      const color = safeColor(t.category_color);
+      return `
+        <li>
+          <button class="w-full text-left px-4 py-3 flex items-center gap-4 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors" onclick="showTask(${Number(t.task_id)})">
+            <div class="w-12 flex-shrink-0 text-center rounded-lg py-1 border-l-4" style="border-color:${color}">
+              <div class="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">${dayNamesShort[(d.getDay() + 6) % 7]}</div>
+              <div class="text-lg font-bold leading-none">${d.getDate()}</div>
+              <div class="text-[10px] uppercase text-gray-500 dark:text-gray-400">${monthNames[d.getMonth()].slice(0, 3)}</div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <p class="font-medium text-sm">${esc(t.title)}</p>
+                ${rel ? `<span class="badge ${rel.cls} text-[10px]">${rel.label}</span>` : ''}
+                ${t.status === 'declined' ? '<span class="badge bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 text-[10px]">Nekad</span>' : ''}
+                ${isUnsignLocked(t.start_datetime) ? '<span class="badge bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300 text-[10px]" title="Mindre än ' + unsignHours() + ' h kvar – kontakta ansvarig om du får förhinder">🔒 Bindande</span>' : ''}
+              </div>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">🕐 ${fmtTime(t.start_datetime)} – ${fmtTime(t.end_datetime)}${t.location ? ` · 📍 ${esc(t.location)}` : ''}</p>
+            </div>
+            <span class="text-gray-300 dark:text-gray-600 flex-shrink-0" aria-hidden="true">›</span>
+          </button>
+        </li>`;
+    }
+
+    // -----------------------------------------------------------------------
+    // Add to own calendar: a personal feed that updates automatically
+    // -----------------------------------------------------------------------
+    function feedUrl() {
+      return `${location.origin}/api/public/ical/${memberKey}.ics`;
+    }
+
+    window.openCalendarModal = function () {
+      if (!me) return;
+      const https = feedUrl();
+      const webcal = https.replace(/^https?:/, 'webcal:');
+      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
+      const isLocal = /^(localhost|127\.|192\.168\.|10\.)/.test(location.hostname);
+      openModal(`
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-lg font-semibold">📅 Lägg till i din kalender</h3>
+            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl" aria-label="Stäng">×</button>
+          </div>
+          <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">Prenumerera på dina pass. Kalendern <strong>uppdateras automatiskt</strong> när du anmäler eller avanmäler dig – du behöver bara göra det här en gång.</p>
+          <div class="space-y-2">
+            <a href="${esc(webcal)}" class="btn-primary w-full">🍎 iPhone, iPad, Mac eller Outlook</a>
+            <a href="${esc(google)}" target="_blank" rel="noopener" class="btn-secondary w-full">Google Kalender / Android</a>
+            <button onclick="copyFeedUrl()" class="btn-secondary w-full">🔗 Kopiera kalenderlänk</button>
+          </div>
+          <details class="mt-4 text-sm text-gray-600 dark:text-gray-400">
+            <summary class="cursor-pointer font-medium text-gray-700 dark:text-gray-300">Hjälp – hur gör jag?</summary>
+            <ul class="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>iPhone/Mac:</strong> tryck på den gula knappen och välj <em>Prenumerera</em>.</li>
+              <li><strong>Google:</strong> tryck på Google-knappen och bekräfta. På Android syns kalendern sedan i Google Kalender-appen (det kan ta en stund innan nya pass dyker upp).</li>
+              <li><strong>Annat:</strong> kopiera länken och lägg till den som en kalender &quot;från URL&quot; / &quot;prenumeration&quot;.</li>
+            </ul>
+            <p class="mt-2">Länken är personlig – dela den inte med andra.</p>
+          </details>
+          ${isLocal ? '<p class="mt-3 text-xs text-amber-600 dark:text-amber-400">Obs: appen körs lokalt, så Google kan inte nå kalendern förrän den ligger på en publik adress.</p>' : ''}
+        </div>
+      `);
+    };
+
+    window.copyFeedUrl = async function () {
+      try {
+        await navigator.clipboard.writeText(feedUrl());
+        toast('Kalenderlänken är kopierad');
+      } catch {
+        prompt('Kopiera kalenderlänken:', feedUrl());
+      }
+    };
+
+    // -----------------------------------------------------------------------
+    // E-mail reminders (opt-in)
+    // -----------------------------------------------------------------------
+    window.openReminderModal = function () {
+      if (!me) return;
+      const m = me.member;
+      openModal(`
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-lg font-semibold">✉️ Påminnelse via mejl</h3>
+            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl" aria-label="Stäng">×</button>
+          </div>
+          ${m.has_email ? `
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">Vi skickar ett mejl till <strong>${esc(m.email_masked)}</strong> ungefär <strong>${Number(me.reminderHoursBefore) || 24} timmar</strong> före varje pass du är anmäld till.</p>
+            <div class="flex gap-2">
+              <button class="btn-primary flex-1" onclick="setReminders(true)">Ja, påminn mig</button>
+              <button class="btn-secondary" onclick="closeModal()">Avbryt</button>
+            </div>
+            <p class="text-xs text-gray-400 mt-3">Fel adress? Kontakta föreningen så ändrar de den. Du kan stänga av påminnelserna när som helst.</p>
+          ` : `
+            <p class="text-sm text-gray-600 dark:text-gray-400">Vi har tyvärr ingen e-postadress registrerad för dig. Kontakta föreningen så lägger de till den.</p>
+          `}
+        </div>
+      `);
+    };
+
+    window.setReminders = async function (enabled) {
+      if (!enabled && !confirm('Vill du stänga av mejlpåminnelserna?')) return;
+      try {
+        await apiPost('/api/public/me/reminders', { enabled });
+        closeModal();
+        toast(enabled ? 'Klart! Du får nu påminnelser via mejl. Kolla inkorgen för en bekräftelse.' : 'Mejlpåminnelser avstängda', enabled ? 'success' : 'info');
+        await loadMe();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+
+    window.toggleAllMine = function () {
+      showAllMine = !showAllMine;
+      renderMemberUi();
+    };
+
+    // Header button: jump to the list
+    window.showMyTasks = function () {
+      document.getElementById('member-banner').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+
+    function slotsBadge(t) {
+      const count = (t.assigned_names && t.assigned_names.length) || t.assigned_count || 0;
+      const slots = t.slots || 0;
+
+      if (slots > 0) {
+        const full = count >= slots;
+        if (full) return `<span class="badge bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 text-[10px]">✓ ${count}/${slots}</span>`;
+        return `<span class="badge bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300 text-[10px]">${count}/${slots}</span>`;
+      }
+
+      if (count > 0) return `<span class="badge bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 text-[10px]">${count} anmäld</span>`;
+      return `<span class="badge bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-500 text-[10px]">Ingen anmäld</span>`;
+    }
+
+    function esc(str) {
+      return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function safeColor(c) {
+      return /^#[0-9a-fA-F]{6}$/.test(c || '') ? c : '#6b7280';
+    }
+
+    function fmtTime(d) {
+      if (!d) return '';
+      return new Date(d.replace(' ', 'T')).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function fmtDate(d) {
+      if (!d) return '';
+      return new Date(d).toLocaleDateString('sv-SE');
+    }
+
+    function statusLabel(s) {
+      const map = {
+        planned: ['Planerad', 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'],
+        assigned: ['Tilldelad', 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'],
+        done: ['Klar', 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'],
+        cancelled: ['Inställd', 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'],
+        accepted: ['Accepterad', 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'],
+        declined: ['Nekad', 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'],
+      };
+      const [label, cls] = map[s] || [s, 'bg-gray-100 text-gray-800'];
+      return `<span class="badge ${cls}">${label}</span>`;
+    }
+
+    function getWeekNumber(d) {
+      const date = new Date(d);
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7));
+      const week1 = new Date(date.getFullYear(), 0, 4);
+      return 1 + Math.round(((date - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+    }
+
+    function getMonday(d) {
+      const date = new Date(d);
+      const day = date.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      date.setDate(date.getDate() + diff);
+      date.setHours(0, 0, 0, 0);
+      return date;
+    }
+
+    // -----------------------------------------------------------------------
+    // Dark mode
+    // -----------------------------------------------------------------------
+    function initDarkMode() {
+      const saved = localStorage.getItem('darkMode');
+      if (saved === 'true' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+    }
+
+    document.getElementById('dark-toggle').addEventListener('click', () => {
+      document.documentElement.classList.toggle('dark');
+      localStorage.setItem('darkMode', document.documentElement.classList.contains('dark'));
+    });
+
+    // -----------------------------------------------------------------------
+    // Modal
+    // -----------------------------------------------------------------------
+    function openModal(html) {
+      document.getElementById('modal-content').innerHTML = html;
+      document.getElementById('modal-backdrop').classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeModal() {
+      document.getElementById('modal-backdrop').classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    document.getElementById('modal-backdrop').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+    // -----------------------------------------------------------------------
+    // Task detail modal with self-signup
+    // -----------------------------------------------------------------------
+    window.showTask = async function (id) {
+      const task = await api(`/api/public/tasks/${Number(id)}`);
+      if (!task) return;
+
+      const assignments = task.assignments || [];
+      const assignedCount = assignments.length;
+      const hasSlots = task.slots > 0;
+      const isFull = hasSlots && assignedCount >= task.slots;
+      const startsAt = task.start_datetime ? new Date(task.start_datetime.replace(' ', 'T')) : null;
+      const hasStarted = startsAt && startsAt < new Date();
+      const isOpen = task.status !== 'cancelled' && task.status !== 'done' && !hasStarted;
+      // "X of the spots require skoterkort" – status computed by the server.
+      const sk = task.skoter || { required: 0, covered: 0, unmet: 0, openForAnyone: true };
+      const skoterSpotsLeft = sk.unmet > 0 && !sk.openForAnyone; // the remaining spot(s) are reserved for skoterkort
+      const iLackSkoter = me && !me.member.skoterkort;
+      const amSignedUp = assignments.some(a => a.is_me);
+      const color = safeColor(task.category_color);
+
+      const locked = isUnsignLocked(task.start_datetime);
+      const deadline = unsignDeadline(task.start_datetime);
+      const calBtn = `<a href="/api/public/tasks/${Number(task.id)}.ics" class="btn-secondary flex-1" download>📅 Lägg till i kalender</a>`;
+
+      let actionHtml;
+      if (amSignedUp) {
+        actionHtml = !isOpen
+          ? `<p class="text-sm text-green-700 dark:text-green-400 font-medium text-center">✓ Du är anmäld till detta pass</p>`
+          : locked ? `
+            <p class="text-sm text-green-700 dark:text-green-400 font-medium mb-2 text-center">✓ Du är anmäld till detta pass</p>
+            <div class="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-900/20 p-3 mb-3 text-sm text-red-800 dark:text-red-200">
+              <p class="font-semibold">🔒 Avanmälan är stängd</p>
+              <p class="mt-1">Det är mindre än ${unsignHours()} timmar kvar till passet, så du kan inte längre avanmäla dig här. Kan du inte komma? <strong>Kontakta ${esc(contactName())}</strong> och se till att det finns en ersättare.</p>
+            </div>
+            <div class="flex">${calBtn}</div>
+          ` : `
+            <p class="text-sm text-green-700 dark:text-green-400 font-medium mb-1 text-center">✓ Du är anmäld till detta pass</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mb-3 text-center">Du kan avanmäla dig fram till <strong>${fmtDeadline(deadline)}</strong>. Därefter är anmälan bindande.</p>
+            <div class="flex flex-col sm:flex-row gap-2">
+              ${calBtn}
+              <button onclick="unsignFromTask(${Number(task.id)})" class="btn-secondary flex-1">Avanmäl mig</button>
+            </div>
+          `;
+      } else if (task.status === 'done' || task.status === 'cancelled') {
+        actionHtml = `<p class="text-sm text-gray-400 text-center">Uppgiften är ${task.status === 'done' ? 'avslutad' : 'inställd'} – anmälan stängd</p>`;
+      } else if (hasStarted) {
+        actionHtml = `<p class="text-sm text-gray-400 text-center">Passet har redan börjat – anmälan stängd</p>`;
+      } else if (isFull) {
+        actionHtml = `<p class="text-sm text-green-600 dark:text-green-400 text-center font-medium">✓ Alla platser är fyllda</p>`;
+      } else if (me) {
+        actionHtml = `
+          <div class="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-900/20 p-3 mb-3 text-sm text-amber-900 dark:text-amber-200">
+            ${locked ? `
+              <p class="font-semibold">⚠️ Passet börjar inom ${unsignHours()} timmar</p>
+              <p class="mt-1">Anmäler du dig nu är det <strong>bindande</strong> – du kan inte avanmäla dig själv. Får du förhinder måste du kontakta ${esc(contactName())} och ordna en ersättare.</p>
+            ` : `
+              <p class="font-semibold">⚠️ Anmälan är bindande ${unsignHours()} timmar före passet</p>
+              <p class="mt-1">Du kan avanmäla dig fram till <strong>${fmtDeadline(deadline)}</strong>. Efter det måste du kontakta ${esc(contactName())} och ordna en ersättare.</p>
+            `}
+          </div>
+          <button onclick="signupForTask(${Number(task.id)})" class="btn-success w-full">Anmäl mig${skoterSpotsLeft ? ' (platsen kräver skoterkort)' : ''}</button>`;
+      } else {
+        actionHtml = `<p class="text-sm text-gray-500 dark:text-gray-400 text-center">Öppna din <strong>personliga länk</strong> från föreningen för att anmäla dig.</p>`;
+      }
+
+      openModal(`
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold">${esc(task.title)}</h3>
+            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl" aria-label="Stäng">×</button>
+          </div>
+          <div class="space-y-4">
+            <div class="flex flex-wrap gap-2">
+              ${statusLabel(task.status)}
+              ${task.category_name ? `<span class="badge" style="background:${color}22;color:${color}">${esc(task.category_name)}</span>` : ''}
+            </div>
+            ${task.description ? `<p class="text-sm text-gray-600 dark:text-gray-400">${esc(task.description)}</p>` : ''}
+            ${sk.required > 0 ? `
+              <div class="text-sm rounded-lg px-3 py-2 ${sk.unmet ? 'bg-blue-50 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200' : 'bg-green-50 text-green-800 dark:bg-green-900/20 dark:text-green-300'}">
+                🛷 ${sk.required >= (task.slots || 1)
+                  ? `Det här passet kräver skoterkort.`
+                  : `${sk.required} av ${task.slots} platser kräver skoterkort.`}
+                ${sk.unmet
+                  ? `<strong>${sk.unmet === 1 ? 'Skoterförare' : sk.unmet + ' skoterförare'} saknas.</strong>${skoterSpotsLeft && iLackSkoter ? ' Den lediga platsen är reserverad för någon med skoterkort.' : ''}`
+                  : '<strong>Skoterförare finns ✓</strong>'}
+              </div>` : ''}
+            <div class="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p class="text-gray-500 dark:text-gray-400">Start</p>
+                <p class="font-medium">${fmtDate(task.start_datetime)} ${fmtTime(task.start_datetime)}</p>
+              </div>
+              <div>
+                <p class="text-gray-500 dark:text-gray-400">Slut</p>
+                <p class="font-medium">${fmtDate(task.end_datetime)} ${fmtTime(task.end_datetime)}</p>
+              </div>
+              ${task.location ? `<div class="col-span-2"><p class="text-gray-500 dark:text-gray-400">Plats</p><p class="font-medium">📍 ${esc(task.location)}</p></div>` : ''}
+            </div>
+
+            ${hasSlots ? `
+              <div class="bg-gray-50 dark:bg-gray-700/30 rounded-lg p-3">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-sm font-medium">Bemanning</span>
+                  <span class="text-sm font-bold ${isFull ? 'text-green-600 dark:text-green-400' : 'text-club-yellow dark:text-yellow-400'}">${assignedCount} / ${task.slots}</span>
+                </div>
+                <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-3">
+                  <div class="h-3 rounded-full transition-all duration-300 ${isFull ? 'bg-green-500' : assignedCount > 0 ? 'bg-club-yellow' : 'bg-gray-300 dark:bg-gray-500'}" style="width:${Math.min(100, Math.round(assignedCount / task.slots * 100))}%"></div>
+                </div>
+                <p class="text-xs mt-1.5 ${isFull ? 'text-green-600 dark:text-green-400 font-medium' : 'text-gray-500 dark:text-gray-400'}">
+                  ${isFull ? '✓ Fullt bemannat!' : `${task.slots - assignedCount} plats${task.slots - assignedCount !== 1 ? 'er' : ''} kvar`}
+                </p>
+              </div>
+            ` : ''}
+
+            <div>
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Anmälda${assignedCount > 0 ? ` (${assignedCount}${hasSlots ? ' av ' + task.slots : ''})` : ''}</p>
+              ${assignedCount > 0 ? `
+                <div class="space-y-1.5">
+                  ${assignments.map(a => `
+                    <div class="flex items-center gap-2 rounded-lg px-3 py-2 ${a.is_me ? 'bg-green-50 dark:bg-green-900/20' : 'bg-gray-50 dark:bg-gray-700/50'}">
+                      <div class="w-7 h-7 bg-yellow-100 dark:bg-club-black rounded-full flex items-center justify-center text-xs font-bold text-club-black dark:text-club-yellow flex-shrink-0">${esc((a.user_name || '?').charAt(0))}</div>
+                      <span class="text-sm font-medium">${esc(a.user_name)}${a.is_me ? ' <span class="text-xs text-green-700 dark:text-green-400">(du)</span>' : ''}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : `<p class="text-sm text-gray-400 bg-gray-50 dark:bg-gray-700/30 rounded-lg px-3 py-3 text-center">Ingen anmäld ännu</p>`}
+            </div>
+
+            <div class="border-t border-gray-200 dark:border-gray-700 pt-4">${actionHtml}</div>
+          </div>
+        </div>
+      `);
+    };
+
+    async function refreshAfterChange(taskId) {
+      await loadMe();
+      loadStats();
+      renderView();
+      showTask(taskId);
+    }
+
+    window.signupForTask = async function (taskId) {
+      try {
+        try {
+          await apiPost(`/api/public/tasks/${taskId}/signup`);
+        } catch (err) {
+          if (err.code !== 'SKOTERKORT_CONFIRM') throw err;
+          if (!confirm(err.message)) return;
+          await apiPost(`/api/public/tasks/${taskId}/signup`, { confirm_skoterkort: true });
+        }
+        toast(`Du är nu anmäld – tack! Kom ihåg: avanmälan senast ${unsignHours()} h före passet.`);
+        refreshAfterChange(taskId);
+      } catch (err) {
+        if (err.code === 'MEMBER_KEY_REQUIRED') await loadMe();
+        toast(err.message, 'error');
+      }
+    };
+
+    window.unsignFromTask = async function (taskId) {
+      if (!confirm('Vill du avanmäla dig från detta pass?')) return;
+      try {
+        await apiPost(`/api/public/tasks/${taskId}/unsign`);
+        toast('Du är avanmäld', 'info');
+        refreshAfterChange(taskId);
+      } catch (err) {
+        if (err.code === 'TOO_LATE') alert(err.message);
+        else toast(err.message, 'error');
+      }
+    };
+
+    window.closeModal = closeModal;
+
+    // -----------------------------------------------------------------------
+    // Navigation
+    // -----------------------------------------------------------------------
+    window.setView = function (v) {
+      currentView = v;
+      ['month', 'week', 'list'].forEach(id => {
+        const btn = document.getElementById('view-' + id);
+        if (id === v) {
+          btn.classList.add('bg-white', 'dark:bg-gray-600', 'shadow-sm');
+        } else {
+          btn.classList.remove('bg-white', 'dark:bg-gray-600', 'shadow-sm');
+        }
+      });
+      renderView();
+    };
+
+    window.navPrev = function () {
+      if (currentView === 'month') currentDate.setMonth(currentDate.getMonth() - 1);
+      else currentDate.setDate(currentDate.getDate() - 7);
+      renderView();
+    };
+
+    window.navNext = function () {
+      if (currentView === 'month') currentDate.setMonth(currentDate.getMonth() + 1);
+      else currentDate.setDate(currentDate.getDate() + 7);
+      renderView();
+    };
+
+    window.navToday = function () {
+      currentDate = new Date();
+      renderView();
+    };
+
+    // -----------------------------------------------------------------------
+    // Render router
+    // -----------------------------------------------------------------------
+    async function renderView() {
+      const container = document.getElementById('calendar-container');
+      container.innerHTML = '<div class="flex items-center justify-center h-48"><svg class="animate-spin h-8 w-8 text-indigo-600" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg></div>';
+
+      switch (currentView) {
+        case 'month': await renderMonth(); break;
+        case 'week': await renderWeek(); break;
+        case 'list': await renderList(); break;
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Month view
+    // -----------------------------------------------------------------------
+    async function renderMonth() {
+      const container = document.getElementById('calendar-container');
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+
+      document.getElementById('nav-label').textContent = `${monthNames[month]} ${year}`;
+
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      let startWeekday = firstDay.getDay() - 1;
+      if (startWeekday < 0) startWeekday = 6;
+
+      const from = new Date(year, month, 1 - startWeekday);
+      const to = new Date(lastDay);
+      to.setDate(to.getDate() + (7 - to.getDay()));
+
+      const tasks = await api(`/api/public/calendar?from=${localDate(from)}&to=${localDate(to)}`) || [];
+
+      const taskMap = {};
+      for (const t of tasks) {
+        const key = t.start_datetime.slice(0, 10);
+        if (!taskMap[key]) taskMap[key] = [];
+        taskMap[key].push(t);
+      }
+
+      const today = localDate(new Date());
+
+      let html = `
+        <div class="grid grid-cols-7 border-b border-gray-200 dark:border-gray-700">
+          ${dayNamesShort.map(d => `<div class="p-2 text-center text-xs font-medium text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800">${d}</div>`).join('')}
+        </div>
+        <div class="grid grid-cols-7">
+      `;
+
+      const current = new Date(from);
+      while (current <= to || current.getDay() !== 1) {
+        const dateKey = localDate(current);
+        const isCurrentMonth = current.getMonth() === month;
+        const isToday = dateKey === today;
+        const isPast = dateKey < today;
+        const dayTasks = taskMap[dateKey] || [];
+        const pastClass = isPast ? ' opacity-10 [&_*]:line-through' : '';
+
+        html += `
+          <div class="min-h-[80px] lg:min-h-[110px] p-1.5 border-b border-r border-gray-200 dark:border-gray-700 ${!isCurrentMonth ? 'bg-gray-50/50 dark:bg-gray-900/30' : ''} ${isToday ? 'bg-yellow-50/40 dark:bg-club-black/30' : ''}${pastClass}" onclick="showDayModal('${dateKey}')">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs ${isToday ? 'bg-club-yellow text-white w-6 h-6 rounded-full flex items-center justify-center font-bold' : isCurrentMonth ? 'text-gray-700 dark:text-gray-300 font-medium' : 'text-gray-400 dark:text-gray-600'}">${current.getDate()}</span>
+              ${dayTasks.length > 0 ? `<span class="text-[10px] font-medium text-gray-400">${dayTasks.length}</span>` : ''}
+            </div>
+            ${dayTasks.slice(0, 3).map(t => {
+              const n = (t.assigned_names || []).length;
+              const s = t.slots || 0;
+              const sc = s > 0 ? (n >= s ? 'color:#16a34a' : n > 0 ? 'color:#ea580c' : 'color:#ef4444') : '';
+              return `<div class="text-xs truncate px-1.5 py-0.5 mb-0.5 rounded cursor-pointer hover:opacity-80 flex items-center justify-between gap-0.5" style="background:${safeColor(t.category_color)}18;border-left:2px solid ${safeColor(t.category_color)}" onclick="event.stopPropagation(); showTask(${t.id})"><span class="truncate" style="color:${safeColor(t.category_color)}">${t.is_mine ? '✓ ' : ''}${esc(t.title)}</span>${s > 0 ? `<span class="flex-shrink-0 font-bold text-[10px]" style="${sc}">${n}/${s}</span>` : ''}</div>`;
+            }).join('')}
+            ${dayTasks.length > 3 ? `<div class="text-[10px] text-gray-500 px-1 cursor-pointer">+${dayTasks.length - 3} till</div>` : ''}
+          </div>
+        `;
+
+        current.setDate(current.getDate() + 1);
+        if (current > to && current.getDay() === 1) break;
+      }
+
+      html += '</div>';
+      container.innerHTML = html;
+    }
+
+    // -----------------------------------------------------------------------
+    // Week view
+    // -----------------------------------------------------------------------
+    async function renderWeek() {
+      const container = document.getElementById('calendar-container');
+      const start = getMonday(currentDate);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+
+      const weekNum = getWeekNumber(start);
+      document.getElementById('nav-label').textContent = `Vecka ${weekNum}, ${start.getFullYear()}`;
+
+      const tasks = await api(`/api/public/calendar?from=${localDate(start)}&to=${localDate(end)}`) || [];
+      const today = localDate(new Date());
+
+      let html = '<div class="divide-y divide-gray-200 dark:divide-gray-700">';
+
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        const dateKey = localDate(d);
+        const dayTasks = tasks.filter(t => t.start_datetime.slice(0, 10) === dateKey);
+        const isToday = dateKey === today;
+        const isPast = dateKey < today;
+        const isWeekend = i >= 5;
+        const pastClass = isPast ? ' opacity-75 [&_*]:line-through' : '';
+
+        html += `
+          <div class="p-4 ${isToday ? 'bg-yellow-50/50 dark:bg-club-black/20' : ''} ${isWeekend ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}${pastClass}">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="font-semibold text-sm ${isToday ? 'text-club-yellow dark:text-yellow-400' : ''}">${dayNamesLong[i]}</span>
+              <span class="text-sm text-gray-400">${d.getDate()} ${monthNames[d.getMonth()].slice(0, 3).toLowerCase()}</span>
+              ${isToday ? '<span class="badge bg-yellow-100 text-club-black dark:bg-club-black dark:text-club-yellow text-[10px]">Idag</span>' : ''}
+              ${dayTasks.length > 0 ? `<span class="badge bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 text-[10px]">${dayTasks.length} uppgift${dayTasks.length > 1 ? 'er' : ''}</span>` : ''}
+            </div>
+            ${dayTasks.length === 0
+              ? '<p class="text-sm text-gray-300 dark:text-gray-600 ml-1">Inga uppgifter</p>'
+              : `<div class="space-y-1.5 ml-1">${dayTasks.map(t => `
+                <div class="flex items-start gap-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50 p-2.5 rounded-lg border border-gray-100 dark:border-gray-700/50" onclick="showTask(${t.id})">
+                  <div class="w-1 h-8 rounded-full flex-shrink-0 mt-0.5" style="background:${safeColor(t.category_color)}"></div>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <p class="text-sm font-medium">${esc(t.title)}</p>
+                      ${slotsBadge(t)}
+                      ${t.is_mine ? '<span class="badge bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 text-[10px]">✓ Du är anmäld</span>' : ''}
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      🕐 ${fmtTime(t.start_datetime)} – ${fmtTime(t.end_datetime)}
+                      ${t.location ? ` · 📍 ${esc(t.location)}` : ''}
+                      ${t.category_name ? ` · ${esc(t.category_name)}` : ''}
+                    </p>
+                  </div>
+                </div>
+              `).join('')}</div>`}
+          </div>
+        `;
+      }
+
+      html += '</div>';
+      container.innerHTML = html;
+    }
+
+    // -----------------------------------------------------------------------
+    // List view (upcoming tasks)
+    // -----------------------------------------------------------------------
+    async function renderList() {
+      const container = document.getElementById('calendar-container');
+      const now = new Date();
+      const future = new Date(now);
+      future.setDate(future.getDate() + 60);
+
+      document.getElementById('nav-label').textContent = 'Kommande 60 dagar';
+
+      const tasks = await api(`/api/public/calendar?from=${localDate(now)}&to=${localDate(future)}`) || [];
+
+      if (tasks.length === 0) {
+        container.innerHTML = '<div class="p-12 text-center text-gray-400">Inga kommande uppgifter</div>';
+        return;
+      }
+
+      const grouped = {};
+      for (const t of tasks) {
+        const key = t.start_datetime.slice(0, 10);
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(t);
+      }
+
+      const today = localDate(new Date());
+      let html = '<div class="divide-y divide-gray-200 dark:divide-gray-700">';
+
+      for (const [date, dayTasks] of Object.entries(grouped)) {
+        const isToday = date === today;
+        const isPast = date < today;
+        const dateObj = new Date(date);
+        const dayName = dayNamesLong[(dateObj.getDay() + 6) % 7];
+        const pastClass = isPast ? ' opacity-75 [&_*]:line-through' : '';
+
+        html += `
+          <div class="p-4 ${isToday ? 'bg-yellow-50/50 dark:bg-club-black/20' : ''}${pastClass}">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="font-semibold text-sm ${isToday ? 'text-club-yellow dark:text-yellow-400' : ''}">${dayName} ${dateObj.getDate()} ${monthNames[dateObj.getMonth()]}</span>
+              ${isToday ? '<span class="badge bg-yellow-100 text-club-black dark:bg-club-black dark:text-club-yellow text-[10px]">Idag</span>' : ''}
+            </div>
+            <div class="space-y-2">
+              ${dayTasks.map(t => `
+                <div class="flex items-start gap-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50 p-3 rounded-lg border border-gray-100 dark:border-gray-700/50" onclick="showTask(${t.id})">
+                  <div class="w-1.5 h-10 rounded-full flex-shrink-0" style="background:${safeColor(t.category_color)}"></div>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <p class="font-medium text-sm">${esc(t.title)}</p>
+                      ${slotsBadge(t)}
+                      ${t.is_mine ? '<span class="badge bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 text-[10px]">✓ Du är anmäld</span>' : ''}
+                      ${t.category_name ? `<span class="badge" style="background:${safeColor(t.category_color)}18;color:${safeColor(t.category_color)}">${esc(t.category_name)}</span>` : ''}
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      🕐 ${fmtTime(t.start_datetime)} – ${fmtTime(t.end_datetime)}
+                      ${t.location ? ` · 📍 ${esc(t.location)}` : ''}
+                    </p>
+                    ${t.description ? `<p class="text-xs text-gray-400 mt-1 line-clamp-1">${esc(t.description)}</p>` : ''}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      html += '</div>';
+      container.innerHTML = html;
+    }
+
+    // -----------------------------------------------------------------------
+    // Day modal (from month click)
+    // -----------------------------------------------------------------------
+    window.showDayModal = async function (dateKey) {
+      const dateObj = new Date(dateKey);
+      const dayName = dayNamesLong[(dateObj.getDay() + 6) % 7];
+      const dateStr = `${dayName} ${dateObj.getDate()} ${monthNames[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+
+      const tasks = await api(`/api/public/calendar?from=${dateKey}&to=${dateKey} 23:59`) || [];
+
+      openModal(`
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold">${dateStr}</h3>
+            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl">×</button>
+          </div>
+          ${tasks.length === 0
+            ? '<p class="text-gray-400 py-4 text-center">Inga uppgifter denna dag</p>'
+            : `<div class="space-y-2">${tasks.map(t => `
+                <div class="flex items-start gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50" onclick="closeModal(); showTask(${t.id})">
+                  <div class="w-1 h-8 rounded-full flex-shrink-0 mt-0.5" style="background:${safeColor(t.category_color)}"></div>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <p class="font-medium text-sm">${esc(t.title)}</p>
+                      ${statusLabel(t.status)}
+                    </div>
+                    <p class="text-xs text-gray-500 mt-0.5">🕐 ${fmtTime(t.start_datetime)} – ${fmtTime(t.end_datetime)} ${t.location ? '· 📍 ' + esc(t.location) : ''}</p>
+                  </div>
+                </div>
+              `).join('')}</div>`
+          }
+        </div>
+      `);
+    };
+
+    // -----------------------------------------------------------------------
+    // Stats
+    // -----------------------------------------------------------------------
+    async function loadStats() {
+      const stats = await api('/api/public/stats');
+      if (stats) {
+        document.getElementById('stat-week').textContent = stats.thisWeek;
+        document.getElementById('stat-unassigned').textContent = stats.unassigned;
+        document.getElementById('stat-done').textContent = stats.completed;
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Init
+    // -----------------------------------------------------------------------
+    initDarkMode();
+    loadMe();
+    loadStats();
+    renderView();
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+ALTER TABLE task_templates ADD COLUMN requires_skoterkort INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN requires_skoterkort INTEGER NOT NULL DEFAULT 0;
