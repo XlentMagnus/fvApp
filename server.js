@@ -72,6 +72,7 @@ app.use(loadUser);
 // Static files. On Vercel, public/ is served by the CDN (see vercel.json) and this is
 // only used locally. HTML/JS/CSS aren't fingerprinted, so browsers must revalidate them.
 app.use(express.static(path.join(__dirname, 'public'), {
+  index: false,
   setHeaders(res, filePath) {
     if (/\.(html|js|css)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
   },
@@ -80,15 +81,20 @@ app.use(routes);
 
 const noCache = { headers: { 'Cache-Control': 'no-cache' } };
 
-app.get('/oversikt', (req, res) => {
+// Start page = the public overview. The admin app lives at /admin.
+app.get(['/', '/oversikt'], (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'oversikt.html'), noCache);
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'), noCache);
 });
 
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'Endpoint hittades inte' });
   }
-  res.sendFile(path.join(__dirname, 'public', 'index.html'), noCache);
+  res.redirect('/');
 });
 
 app.use(errorHandler);

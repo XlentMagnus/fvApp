@@ -29,7 +29,7 @@ async function loadUser(req, res, next) {
 function requireAuth(req, res, next) {
   if (!req.user) {
     if (wantsJson(req)) return res.status(401).json({ error: 'Ej inloggad' });
-    return res.redirect('/');
+    return res.redirect('/admin');
   }
   next();
 }
@@ -37,7 +37,7 @@ function requireAuth(req, res, next) {
 function requireAdmin(req, res, next) {
   if (!req.user) {
     if (wantsJson(req)) return res.status(401).json({ error: 'Ej inloggad' });
-    return res.redirect('/');
+    return res.redirect('/admin');
   }
   if (req.user.role !== 'admin') {
     if (wantsJson(req)) return res.status(403).json({ error: 'Åtkomst nekad' });

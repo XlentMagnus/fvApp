@@ -141,7 +141,8 @@ avanmälningar kan ångras med ett klick.
 /public
   /css             - Tailwind (input + compiled)
   /js              - Klient-JavaScript (SPA)
-  index.html       - Huvudsida
+  oversikt.html    - Startsida (publik översikt, `/`)
+  admin.html       - Admin-appen (`/admin`)
 /db
   /migrations      - SQL-migrationsfiler
   /seed            - Seed-script
