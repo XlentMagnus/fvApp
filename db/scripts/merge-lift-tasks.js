@@ -8,8 +8,9 @@
  *   ... --apply                                            # genomför (backup först)
  *
  * Anmälningar flyttas till det behållna passet (samma person bara en gång). Har fler än
- * 2 personer anmält sig till samma tid behålls alla – passet visas då som överfullt så att
- * admin kan välja vem som ska bort. Hela ändringen körs i en transaktion.
+ * 2 personer hamnat på samma tid behålls 2: först en med skoterkort, sedan den som anmälde
+ * sig själv först (annars den som tilldelades först). Övriga tas bort och loggas som
+ * "Borttagen" i Loggen, så att det går att ångra. Hela ändringen körs i en transaktion.
  */
 const fs = require('fs');
 const path = require('path');
@@ -22,6 +23,7 @@ if (process.argv.includes('--remote')) {
 }
 const db = require('../connection');
 const config = require('../../config');
+const auditRepository = require('../../app/repositories/auditRepository');
 
 const OLD_TITLES = ['Liftvärd 1 / Skoterförare', 'Liftvärd 2'];
 const NEW_TITLE = 'Liftvärd';
@@ -41,6 +43,19 @@ async function main() {
   const byTask = new Map(ids.map(id => [id, []]));
   for (const a of assignments) byTask.get(a.task_id).push(a);
 
+  // Who signed up themselves (via personal link), and when – keyed "taskId:userId".
+  const selfSignups = new Map();
+  if (ids.length) {
+    for (const r of await db.all(`SELECT task_id, target_user_id, MIN(id) AS first FROM audit_log
+        WHERE action = 'signup' AND undone_at IS NULL AND task_id IN (${ids.map(() => '?').join(',')})
+        GROUP BY task_id, target_user_id`, ...ids)) selfSignups.set(`${r.task_id}:${r.target_user_id}`, r.first);
+  }
+  // Lower = higher priority: self sign-ups first (earliest first), then by when the assignment was made.
+  const priority = a => {
+    const self = selfSignups.get(`${a.task_id}:${a.user_id}`);
+    return self != null ? self : 1e12 + a.id;
+  };
+
   // Group by time
   const groups = new Map();
   for (const t of tasks) {
@@ -59,12 +74,22 @@ async function main() {
     const move = [];
     const dupes = [];
     for (const o of others) for (const a of byTask.get(o.id)) (seen.has(a.user_id) ? dupes : (seen.add(a.user_id), move)).push(a);
-    const people = [...byTask.get(keep.id), ...move];
-    plan.push({ key, keep, others, move, dupes, people, alreadyDone: others.length === 0 && norm(keep.title) === NEW_TITLE && keep.slots === SLOTS });
+    let people = [...byTask.get(keep.id), ...move];
+
+    // Too many people: keep SKOTER_SLOTS skoterkort holders + the rest by priority.
+    const drop = [];
+    if (people.length > SLOTS) {
+      const ordered = [...people].sort((a, b) => priority(a) - priority(b));
+      const kept = ordered.filter(a => a.skoterkort).slice(0, SKOTER_SLOTS);
+      for (const a of ordered) if (kept.length < SLOTS && !kept.includes(a)) kept.push(a);
+      for (const a of people) if (!kept.includes(a)) drop.push(a);
+      people = people.filter(a => kept.includes(a));
+    }
+    plan.push({ key, keep, others, move, dupes, drop, people, alreadyDone: others.length === 0 && norm(keep.title) === NEW_TITLE && keep.slots === SLOTS });
   }
 
   const todo = plan.filter(p => !p.alreadyDone);
-  const overfull = todo.filter(p => p.people.length > SLOTS);
+  const trimmed = todo.filter(p => p.drop.length);
   const noDriver = todo.filter(p => p.people.length >= SLOTS && !p.people.some(a => a.skoterkort));
 
   const templates = (await db.all('SELECT * FROM task_templates ORDER BY id')).filter(t => isLift(t.title));
@@ -81,10 +106,10 @@ async function main() {
   console.log(`          ${todo.reduce((s, p) => s + p.others.length, 0)} pass tas bort (dubbletter + "Liftvärd 2")`);
   console.log(`          ${todo.reduce((s, p) => s + p.move.length, 0)} anmälningar flyttas, ${todo.reduce((s, p) => s + p.dupes.length, 0)} dubbelanmälningar (samma person) tas bort`);
   if (plan.length - todo.length) console.log(`          ${plan.length - todo.length} tider är redan sammanslagna`);
-  if (overfull.length) {
-    console.log(`\n⚠️  ${overfull.length} tider får fler än ${SLOTS} anmälda (alla behålls – admin väljer vem som ska bort):`);
-    for (const p of overfull.slice(0, 15)) console.log(`   ${p.keep.start_datetime}: ${p.people.map(a => a.user_name + (a.skoterkort ? ' 🛷' : '')).join(', ')}`);
-    if (overfull.length > 15) console.log(`   … och ${overfull.length - 15} till`);
+  if (trimmed.length) {
+    console.log(`\n✂️  ${trimmed.length} tider hade fler än ${SLOTS} – ${trimmed.reduce((s, p) => s + p.drop.length, 0)} tas bort (loggas, kan ångras i Loggen):`);
+    const tag = a => `${a.user_name}${a.skoterkort ? ' 🛷' : ''}${selfSignups.has(`${a.task_id}:${a.user_id}`) ? ' (själv)' : ''}`;
+    for (const p of trimmed) console.log(`   ${p.keep.start_datetime}  behåller: ${p.people.map(tag).join(', ').padEnd(48)} tar bort: ${p.drop.map(tag).join(', ')}`);
   }
   if (noDriver.length) {
     console.log(`\n⚠️  ${noDriver.length} tider är fullbokade men saknar någon med skoterkort:`);
@@ -113,6 +138,15 @@ async function main() {
       NEW_TITLE, SLOTS, SKOTER_SLOTS, description, status, p.keep.id]);
     for (const a of p.move) stmts.push(['UPDATE task_assignments SET task_id = ? WHERE id = ?', p.keep.id, a.id]);
     for (const a of p.dupes) stmts.push(['DELETE FROM task_assignments WHERE id = ?', a.id]);
+    for (const a of p.drop) {
+      stmts.push(['DELETE FROM task_assignments WHERE id = ?', a.id]);
+      stmts.push(auditRepository.logStatement({
+        actorKind: 'system', actor: { id: null, name: 'Sammanslagning' }, action: 'unassign',
+        task: { id: p.keep.id, title: NEW_TITLE, start_datetime: p.keep.start_datetime },
+        target: { id: a.user_id, name: a.user_name },
+        details: `Liftvärd slogs ihop – fler än ${SLOTS} på samma tid`,
+      }));
+    }
     for (const o of p.others) {
       stmts.push(['UPDATE audit_log SET task_id = ? WHERE task_id = ?', p.keep.id, o.id]);
       stmts.push(['DELETE FROM task_assignments WHERE task_id = ?', o.id]);
