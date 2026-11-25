@@ -11,6 +11,7 @@ router.get('/my', requireAuth, taskController.myTasks);
 router.get('/', requireAuth, taskController.list);
 router.get('/:id', requireAuth, taskController.getById);
 router.post('/', requireAdmin, taskController.create);
+router.post('/bulk-delete', requireAdmin, taskController.bulkDelete);
 router.put('/:id', requireAdmin, taskController.update);
 router.delete('/:id', requireAdmin, taskController.delete);
 

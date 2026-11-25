@@ -38,6 +38,15 @@ const taskController = {
     } catch (err) { next(err); }
   },
 
+  async bulkDelete(req, res, next) {
+    try {
+      const ids = req.body?.ids;
+      if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids krävs som lista' });
+      if (ids.length > 100) return res.status(400).json({ error: 'Högst 100 åt gången' });
+      res.json(await taskService.deleteMany(ids, req.user));
+    } catch (err) { next(err); }
+  },
+
   async getStats(req, res, next) {
     try {
       const stats = await taskService.getStats();

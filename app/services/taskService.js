@@ -1,6 +1,7 @@
 const taskRepository = require('../repositories/taskRepository');
 const assignmentRepository = require('../repositories/assignmentRepository');
 const userRepository = require('../repositories/userRepository');
+const db = require('../../db/connection');
 const auditRepository = require('../repositories/auditRepository');
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
@@ -51,6 +52,30 @@ const taskService = {
       details: assigned.length ? `Anmälda: ${assigned.join(', ')}` : null,
     });
     return { success: true };
+  },
+
+  /** Deletes several tasks in one transaction (sign-ups removed, each deletion logged). */
+  async deleteMany(ids, actor) {
+    const list = [...new Set(ids.map(Number).filter(Number.isInteger))].slice(0, 100);
+    if (!list.length) return { deleted: 0, missing: 0 };
+    const marks = list.map(() => '?').join(',');
+    const tasks = await db.all(`SELECT id, title, start_datetime FROM tasks WHERE id IN (${marks})`, ...list);
+    if (!tasks.length) return { deleted: 0, missing: list.length };
+    const found = tasks.map(t => t.id);
+    const fm = found.map(() => '?').join(',');
+    const names = new Map();
+    for (const a of await db.all(`SELECT ta.task_id, u.name FROM task_assignments ta JOIN users u ON u.id = ta.user_id WHERE ta.task_id IN (${fm})`, ...found)) {
+      (names.get(a.task_id) || names.set(a.task_id, []).get(a.task_id)).push(a.name);
+    }
+    await db.batch([
+      [`DELETE FROM task_assignments WHERE task_id IN (${fm})`, ...found],
+      [`DELETE FROM tasks WHERE id IN (${fm})`, ...found],
+      ...tasks.map(t => auditRepository.logStatement({
+        actorKind: 'admin', actor, action: 'task_delete', task: t,
+        details: names.get(t.id) ? `Anmälda: ${names.get(t.id).join(', ')}` : null,
+      })),
+    ]);
+    return { deleted: tasks.length, missing: list.length - tasks.length };
   },
 
   async getStats() {

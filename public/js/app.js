@@ -586,19 +586,77 @@
     updateBulkToolbar();
   }
 
+  // Progress dialog for long-running bulk operations. Can't be closed while running.
+  function progressDialog(title, total) {
+    let locked = true;
+    const backdrop = document.getElementById('modal-backdrop');
+    const block = e => { if (locked && (e.key === 'Escape' || e.target === backdrop)) e.stopImmediatePropagation(); };
+    backdrop.addEventListener('click', block, true);
+    document.addEventListener('keydown', block, true);
+    openModal(`
+      <div class="p-6">
+        <h3 class="text-lg font-semibold mb-1">${escHtml(title)}</h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4" id="pg-text">Startar…</p>
+        <div class="w-full h-3 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+          <div id="pg-bar" class="h-3 bg-club-yellow transition-all duration-300" style="width:0%"></div>
+        </div>
+        <div class="flex items-center justify-between mt-2 text-xs text-gray-500 dark:text-gray-400">
+          <span id="pg-count">0 av ${total}</span><span id="pg-pct">0 %</span>
+        </div>
+        <p id="pg-err" class="hidden text-sm text-red-600 dark:text-red-400 mt-3"></p>
+        <p id="pg-hint" class="text-xs text-gray-400 mt-4">Stäng inte sidan medan det pågår.</p>
+        <div id="pg-done" class="hidden mt-4"><button class="btn-primary w-full" onclick="window.FV.closeModal()">Stäng</button></div>
+      </div>`);
+    return {
+      update(done, text) {
+        const pct = total ? Math.round(done / total * 100) : 100;
+        document.getElementById('pg-bar').style.width = pct + '%';
+        document.getElementById('pg-count').textContent = `${done} av ${total}`;
+        document.getElementById('pg-pct').textContent = pct + ' %';
+        if (text) document.getElementById('pg-text').textContent = text;
+      },
+      error(msg) {
+        const el = document.getElementById('pg-err');
+        el.textContent = msg; el.classList.remove('hidden');
+      },
+      finish(text, ok = true) {
+        locked = false;
+        backdrop.removeEventListener('click', block, true);
+        document.removeEventListener('keydown', block, true);
+        document.getElementById('pg-text').textContent = text;
+        document.getElementById('pg-bar').classList.replace('bg-club-yellow', ok ? 'bg-green-500' : 'bg-red-500');
+        document.getElementById('pg-hint').classList.add('hidden');
+        document.getElementById('pg-done').classList.remove('hidden');
+      },
+    };
+  }
+
   async function bulkDeleteTasks() {
     const ids = [...selectedTaskIds];
     if (ids.length === 0) return;
-    if (!confirm(`Vill du ta bort ${ids.length} uppgift(er)?`)) return;
-    let ok = 0;
-    for (const id of ids) {
+    if (!confirm(`Vill du ta bort ${ids.length} uppgift(er)? Anmälningar till dem tas också bort.`)) return;
+
+    const CHUNK = 25;
+    const pg = progressDialog(`Tar bort ${ids.length} uppgift(er)`, ids.length);
+    let done = 0;
+    let deleted = 0;
+    let failed = 0;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      pg.update(done, 'Tar bort…');
       try {
-        await api(`/api/tasks/${id}`, { method: 'DELETE' });
-        ok++;
-      } catch { /* skip */ }
+        const r = await api('/api/tasks/bulk-delete', { method: 'POST', body: { ids: chunk } });
+        if (!r) return; // session expired – api() has already shown the login page
+        deleted += r.deleted;
+        chunk.forEach(id => selectedTaskIds.delete(id));
+      } catch (err) {
+        failed += chunk.length;
+        pg.error(`${failed} kunde inte tas bort: ${err.message}`);
+      }
+      done += chunk.length;
+      pg.update(done);
     }
-    selectedTaskIds.clear();
-    toast(`${ok} uppgift(er) borttagna`);
+    pg.finish(failed ? `${deleted} borttagna, ${failed} misslyckades.` : `Klart! ${deleted} uppgift(er) borttagna.`, !failed);
     renderTasks();
   }
 
