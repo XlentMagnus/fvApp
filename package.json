@@ -12,7 +12,8 @@
     "build:css": "tailwindcss -i ./public/css/input.css -o ./public/css/style.css --minify",
     "migrate:merge-lift": "node db/scripts/merge-lift-tasks.js",
     "migrate:turso": "node db/migrate.js --remote",
-    "db:copy-to-turso": "node db/scripts/copy-to-turso.js"
+    "db:copy-to-turso": "node db/scripts/copy-to-turso.js",
+    "migrate:merge-lift:turso": "node db/scripts/merge-lift-tasks.js --remote"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
