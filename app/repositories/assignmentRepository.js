@@ -29,7 +29,7 @@ const assignmentRepository = {
   async findByUser(userId, { upcoming, history } = {}) {
     let sql = `
       SELECT ta.*, t.title, t.description, t.location, t.start_datetime, t.end_datetime,
-             t.status as task_status, c.name as category_name, c.color as category_color
+             t.slots, t.skoterkort_slots, t.status as task_status, c.name as category_name, c.color as category_color
       FROM task_assignments ta
       JOIN tasks t ON ta.task_id = t.id
       LEFT JOIN categories c ON t.category_id = c.id

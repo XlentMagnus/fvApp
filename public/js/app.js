@@ -435,7 +435,7 @@
             const n = (t.assigned_names || []).length;
             const s = t.slots || 0;
             const sc = s > 0 ? (n >= s ? 'color:#16a34a' : n > 0 ? 'color:#ea580c' : 'color:#ef4444') : '';
-            return `<div class="text-xs truncate px-1 py-0.5 mb-0.5 rounded flex items-center justify-between gap-0.5" style="background:${safeColor(t.category_color)}22;border-left:2px solid ${safeColor(t.category_color)}" onclick="event.stopPropagation(); window.FV.showTaskDetail(${t.id})"><span class="truncate" style="color:${safeColor(t.category_color)}">${escHtml(t.title)}</span>${s > 0 ? `<span class="flex-shrink-0 font-bold text-[10px]" style="${sc}">${n}/${s}</span>` : ''}</div>`;
+            return `<div class="text-xs truncate px-1 py-0.5 mb-0.5 rounded flex items-center justify-between gap-0.5" style="background:${safeColor(t.category_color)}22;border-left:2px solid ${safeColor(t.category_color)}" onclick="event.stopPropagation(); window.FV.showTaskDetail(${t.id})"><span class="truncate" style="color:${safeColor(t.category_color)}">${t.skoterkort_slots > 0 ? '🛷 ' : ''}${escHtml(t.title)}</span>${s > 0 ? `<span class="flex-shrink-0 font-bold text-[10px]" style="${sc}">${n}/${s}</span>` : ''}</div>`;
           }).join('')}
           ${dayTasks.length > 3 ? `<div class="text-xs text-gray-500 px-1">+${dayTasks.length - 3} till</div>` : ''}
         </div>
@@ -932,6 +932,42 @@
     };
   }
 
+  // Spots one by one (same rule as the server): skoterkort spots first, filled by holders.
+  function buildSpots(task, assignments) {
+    const required = task.skoterkort_slots || 0;
+    const total = Math.max(task.slots || 0, assignments.length);
+    const ordered = [...assignments].sort((a, b) => a.id - b.id);
+    const drivers = ordered.filter(a => a.user_skoterkort).slice(0, required);
+    const rest = ordered.filter(a => !drivers.includes(a));
+    const spots = [];
+    for (let i = 0; i < total; i++) {
+      spots.push(i < required ? { skoter: true, assignment: drivers[i] || null } : { skoter: false, extra: task.slots > 0 && i >= task.slots, assignment: null });
+    }
+    const free = spots.filter(x => !x.skoter).concat(spots.filter(x => x.skoter && !x.assignment));
+    rest.forEach((a, i) => { if (free[i]) free[i].assignment = a; });
+    return spots;
+  }
+
+  function adminSpotRow(sp, i) {
+    const a = sp.assignment;
+    const label = sp.skoter
+      ? '<span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 text-[11px] whitespace-nowrap">🛷 Skoterförare · kräver skoterkort</span>'
+      : sp.extra ? '<span class="badge bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 text-[11px]">Extra (överfullt)</span>'
+      : `<span class="badge bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 text-[11px]">Plats ${i + 1}</span>`;
+    const warn = sp.skoter && a && !a.user_skoterkort ? ' <span class="text-xs text-amber-600" title="Har inte skoterkort">⚠️ saknar skoterkort</span>' : '';
+    return `
+      <div class="flex items-center justify-between gap-2 rounded-lg p-2 ${sp.skoter ? 'bg-blue-50/60 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/40' : 'bg-gray-50 dark:bg-gray-700/50'}">
+        <div class="flex items-center gap-2 min-w-0">
+          ${a ? `<div class="w-7 h-7 bg-yellow-100 dark:bg-club-black rounded-full flex items-center justify-center text-xs font-bold text-club-yellow flex-shrink-0">${escHtml(a.user_name.charAt(0))}</div>
+          <div class="min-w-0">
+            <span class="text-sm font-medium">${escHtml(a.user_name)}</span>${warn}
+            ${a.user_phone ? `<p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5"><a href="tel:${escHtml(a.user_phone.replace(/\s/g, ''))}" class="hover:text-club-yellow">${escHtml(a.user_phone)}</a></p>` : ''}
+          </div>` : '<span class="text-sm text-gray-400 italic">Ledig</span>'}
+        </div>
+        <div class="flex items-center gap-1.5 flex-shrink-0">${label}${a ? statusBadge(a.status) : ''}</div>
+      </div>`;
+  }
+
   async function showTaskDetail(taskId) {
     try {
       const task = await api(`/api/tasks/${taskId}`);
@@ -969,6 +1005,12 @@
                 </div>
               </div>
             ` : ''}
+            ${task.skoterkort_slots > 0 && task.slots > 0 ? `
+              <div>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">Platser (${task.assignments.length} av ${task.slots})</p>
+                <div class="space-y-2">${buildSpots(task, task.assignments || []).map((sp, i) => adminSpotRow(sp, i)).join('')}</div>
+              </div>
+            ` : `
             ${task.assignments && task.assignments.length > 0 ? `
               <div>
                 <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">Tilldelade (${task.assignments.length}${task.slots > 0 ? ' av ' + task.slots : ''})</p>
@@ -993,6 +1035,7 @@
                 </div>
               </div>
             ` : '<p class="text-sm text-gray-400">Ingen tilldelad</p>'}
+            `}
             ${currentUser.role === 'admin' ? `
               <div class="flex gap-2 pt-2">
                 <button class="btn-primary btn-sm flex-1" onclick="window.FV.closeModal(); window.FV.openTaskModal(${task.id})">Redigera</button>

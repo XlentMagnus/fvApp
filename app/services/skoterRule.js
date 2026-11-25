@@ -33,4 +33,27 @@ function skoterStatus(task, assignments) {
   };
 }
 
-module.exports = { normaliseSkoterSlots, skoterStatus };
+/**
+ * Lays the task's spots out one by one: the first `skoterkort_slots` spots are
+ * "Skoterförare" spots and are filled with skoterkort holders first; the rest are
+ * ordinary spots. People beyond the number of spots end up as extra spots.
+ * @returns {{ skoter: boolean, extra?: boolean, assignment: object|null }[]}
+ */
+function buildSpots(task, assignments) {
+  const required = task.skoterkort_slots || 0;
+  const total = Math.max(task.slots || 0, assignments.length);
+  const ordered = [...assignments].sort((a, b) => a.id - b.id);
+  const drivers = ordered.filter(a => a.user_skoterkort).slice(0, required);
+  const rest = ordered.filter(a => !drivers.includes(a));
+  const spots = [];
+  for (let i = 0; i < total; i++) {
+    if (i < required) spots.push({ skoter: true, assignment: drivers[i] || null });
+    else spots.push({ skoter: false, extra: task.slots > 0 && i >= task.slots, assignment: null });
+  }
+  // People who aren't drivers: ordinary spots first, then any unfilled driver spot.
+  const free = spots.filter(s => !s.skoter).concat(spots.filter(s => s.skoter && !s.assignment));
+  rest.forEach((a, i) => { if (free[i]) free[i].assignment = a; });
+  return spots;
+}
+
+module.exports = { normaliseSkoterSlots, skoterStatus, buildSpots };

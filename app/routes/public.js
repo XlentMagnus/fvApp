@@ -15,7 +15,7 @@ const userRepository = require('../repositories/userRepository');
 const icalService = require('../services/icalService');
 const reminderService = require('../services/reminderService');
 const { loadMember, requireMember } = require('../middleware/auth');
-const { skoterStatus } = require('../services/skoterRule');
+const { skoterStatus, buildSpots } = require('../services/skoterRule');
 
 const router = Router();
 router.use(loadMember);
@@ -36,6 +36,10 @@ router.get('/calendar', async (req, res, next) => {
       const assignments = byTask.get(t.id);
       t.assigned_names = assignments.map(a => a.user_name);
       if (req.member) t.is_mine = assignments.some(a => a.user_id === req.member.id);
+      if (t.skoterkort_slots > 0) {
+        const st = skoterStatus(t, assignments);
+        t.skoter = { required: st.required, covered: st.covered, unmet: st.unmet };
+      }
       delete t.created_by;
     }
     res.json(tasks);
@@ -46,7 +50,16 @@ router.get('/calendar', async (req, res, next) => {
 router.get('/me', requireMember, async (req, res, next) => {
   try {
     const m = req.member;
-    const upcoming = (await assignmentRepository.findByUser(m.id, { upcoming: true })).map(a => ({
+    const mine = await assignmentRepository.findByUser(m.id, { upcoming: true });
+    // Which of my sessions am I the skoterförare on?
+    const byTask = await assignmentRepository.findByTasks(mine.filter(a => a.skoterkort_slots > 0).map(a => a.task_id));
+    const isDriver = a => {
+      const list = byTask.get(a.task_id);
+      return !!list && buildSpots({ slots: a.slots, skoterkort_slots: a.skoterkort_slots }, list)
+        .some(s => s.skoter && s.assignment && s.assignment.user_id === m.id);
+    };
+    const upcoming = mine.map(a => ({
+      is_driver: isDriver(a),
       task_id: a.task_id,
       title: a.title,
       location: a.location,
@@ -152,6 +165,13 @@ router.get('/tasks/:id', async (req, res, next) => {
     // Only aggregate numbers – which individuals hold a skoterkort isn't public.
     task.skoter = skoterStatus(task, assignments);
     if (task.skoter.open === Infinity) task.skoter.open = null;
+    // Spot by spot (who holds the "Skoterförare" spot is shown – it's a role, like a title).
+    task.spots = task.slots > 0 ? buildSpots(task, assignments).map(s => ({
+      skoter: s.skoter,
+      extra: !!s.extra,
+      user_name: s.assignment ? s.assignment.user_name : null,
+      is_me: !!(s.assignment && req.member && s.assignment.user_id === req.member.id),
+    })) : null;
     delete task.created_by;
     delete task.creator_name;
     res.json(task);
