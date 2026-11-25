@@ -423,11 +423,12 @@
       ? `<div class="card p-10 text-center text-gray-400">${data.tasks.length ? 'Inga pass matchar filtret' : 'Inga pass i perioden'}</div>`
       : Object.entries(days).map(([day, list]) => {
         const dayMissing = list.reduce((s, t) => s + (t.status === 'cancelled' ? 0 : t.missing), 0);
+        const dayOver = list.filter(t => t.status !== 'cancelled' && t.overbooked).length;
         return `
         <div class="card overflow-hidden">
           <div class="px-4 py-2 bg-gray-50 dark:bg-gray-700/40 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
             <span class="text-sm font-semibold capitalize">${dayName(day)}</span>
-            <span class="text-xs ${dayMissing ? 'text-red-600 dark:text-red-400 font-medium' : 'text-green-600 dark:text-green-400'}">${dayMissing ? `${dayMissing} plats${dayMissing > 1 ? 'er' : ''} saknas` : '✓ allt bemannat'}</span>
+            <span class="text-xs ${dayMissing ? 'text-red-600 dark:text-red-400 font-medium' : dayOver ? 'text-purple-600 dark:text-purple-400 font-medium' : 'text-green-600 dark:text-green-400'}">${[dayMissing ? `${dayMissing} plats${dayMissing > 1 ? 'er' : ''} saknas` : '', dayOver ? `${dayOver} överbokat` : ''].filter(Boolean).join(' · ') || '✓ allt bemannat'}</span>
           </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700/60">
             ${list.map(t => {
@@ -1242,10 +1243,13 @@
       try {
         if (isEdit) {
           await api(`/api/tasks/${task.id}`, { method: 'PUT', body });
-          if (body.assignees.length > 0) {
-            await api(`/api/tasks/${task.id}/assign`, { method: 'POST', body: { user_ids: body.assignees } });
-          }
-          toast('Uppgift uppdaterad');
+          const before = new Set((task.assignments || []).map(a => a.user_id));
+          const after = new Set(body.assignees);
+          const added = body.assignees.filter(id => !before.has(id));
+          const removed = [...before].filter(id => !after.has(id));
+          if (added.length) await api(`/api/tasks/${task.id}/assign`, { method: 'POST', body: { user_ids: added } });
+          for (const uid of removed) await api(`/api/tasks/${task.id}/assign/${uid}`, { method: 'DELETE' });
+          toast(`Uppgift uppdaterad${added.length ? ` · ${added.length} tillagd(a)` : ''}${removed.length ? ` · ${removed.length} borttagen/borttagna` : ''}`);
         } else {
           await api('/api/tasks', { method: 'POST', body });
           toast('Uppgift skapad');
@@ -1274,7 +1278,7 @@
     return spots;
   }
 
-  function adminSpotRow(sp, i) {
+  function adminSpotRow(task, sp, i) {
     const a = sp.assignment;
     const label = sp.skoter
       ? '<span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 text-[11px] whitespace-nowrap">🛷 Skoterförare · kräver skoterkort</span>'
@@ -1290,8 +1294,24 @@
             ${a.user_phone ? `<p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5"><a href="tel:${escHtml(a.user_phone.replace(/\s/g, ''))}" class="hover:text-club-yellow">${escHtml(a.user_phone)}</a></p>` : ''}
           </div>` : '<span class="text-sm text-gray-400 italic">Ledig</span>'}
         </div>
-        <div class="flex items-center gap-1.5 flex-shrink-0">${label}${a ? statusBadge(a.status) : ''}</div>
+        <div class="flex items-center gap-1.5 flex-shrink-0">${label}${a ? statusBadge(a.status) : ''}${a ? `${currentUser.role === 'admin' ? `<button class="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30" title="Ta bort ${escHtml(a.user_name)} från passet" onclick="window.FV.removeFromTask(${task.id}, ${a.user_id}, ${JSON.stringify(a.user_name).replace(/"/g, '&quot;')})">✕</button>` : ''}` : ''}</div>
       </div>`;
+  }
+
+  async function removeFromTask(taskId, userId, name) {
+    if (!confirm(`Ta bort ${name} från passet? (Kan ångras i Loggen.)`)) return;
+    try {
+      await api(`/api/tasks/${taskId}/assign/${userId}`, { method: 'DELETE' });
+      toast(`${name} borttagen från passet`);
+      await showTaskDetail(taskId);
+      refreshBehindModal();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  // Re-render the page under an open dialog (e.g. overview counts after a change).
+  function refreshBehindModal() {
+    if (currentPage === 'dashboard' && currentUser.role === 'admin') renderOverview();
+    else if (currentPage === 'tasks') renderTasks();
   }
 
   async function showTaskDetail(taskId) {
@@ -1334,7 +1354,7 @@
             ${task.skoterkort_slots > 0 && task.slots > 0 ? `
               <div>
                 <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">Platser (${task.assignments.length} av ${task.slots})</p>
-                <div class="space-y-2">${buildSpots(task, task.assignments || []).map((sp, i) => adminSpotRow(sp, i)).join('')}</div>
+                <div class="space-y-2">${buildSpots(task, task.assignments || []).map((sp, i) => adminSpotRow(task, sp, i)).join('')}</div>
               </div>
             ` : `
             ${task.assignments && task.assignments.length > 0 ? `
@@ -1355,7 +1375,7 @@
                           ${a.user_phone ? `<p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5"><a href="tel:${escHtml(a.user_phone.replace(/\s/g, ''))}" class="hover:text-club-yellow">${escHtml(a.user_phone)}</a></p>` : ''}
                         </div>
                       </div>
-                      ${statusBadge(a.status)}
+                      <div class="flex items-center gap-1.5 flex-shrink-0">${statusBadge(a.status)}${currentUser.role === 'admin' ? `<button class="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30" title="Ta bort ${escHtml(a.user_name)} från passet" onclick="window.FV.removeFromTask(${task.id}, ${a.user_id}, ${JSON.stringify(a.user_name).replace(/"/g, '&quot;')})">✕</button>` : ''}</div>
                     </div>
                   `).join('')}
                 </div>
@@ -3080,6 +3100,7 @@
     ovFilter,
     ovSearchPerson,
     ovAutoAssign,
+    removeFromTask,
     aaUpdateCount,
     aaSelectAll,
     aaSaveCategorySkill,
