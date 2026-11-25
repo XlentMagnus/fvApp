@@ -8,6 +8,7 @@ const templateRoutes = require('./templates');
 const publicRoutes = require('./public');
 const auditRoutes = require('./audit');
 const autoAssignRoutes = require('./autoAssign');
+const overviewRoutes = require('./overview');
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use('/api/categories', categoryRoutes);
 router.use('/api/templates', templateRoutes);
 router.use('/api/audit', auditRoutes);
 router.use('/api/auto-assign', autoAssignRoutes);
+router.use('/api/overview', overviewRoutes);
 
 module.exports = router;

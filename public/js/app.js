@@ -255,9 +255,277 @@
   }
 
   // ---------------------------------------------------------------------------
+  // ADMIN OVERVIEW: staffing for everyone in a period
+  // ---------------------------------------------------------------------------
+  const OV_RANGES = [
+    ['week', 'Denna vecka'],
+    ['14d', '2 veckor'],
+    ['month', 'Denna månad'],
+    ['30d', '30 dagar'],
+    ['custom', 'Välj datum'],
+  ];
+  const ov = { range: '14d', from: null, to: null, onlyOpen: false, cat: '', q: '', data: null };
+  try { Object.assign(ov, JSON.parse(localStorage.getItem('fvOverview') || '{}'), { data: null }); } catch { /* ignore */ }
+
+  function ovSave() {
+    try { localStorage.setItem('fvOverview', JSON.stringify({ range: ov.range, from: ov.from, to: ov.to, onlyOpen: ov.onlyOpen, cat: ov.cat })); } catch { /* ignore */ }
+  }
+
+  function ovPeriod() {
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    let from = new Date(start);
+    let to = new Date(start);
+    if (ov.range === 'week') {
+      from.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      to = new Date(from); to.setDate(from.getDate() + 6);
+    } else if (ov.range === 'month') {
+      from = new Date(start.getFullYear(), start.getMonth(), 1);
+      to = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+    } else if (ov.range === '30d') {
+      to.setDate(start.getDate() + 29);
+    } else if (ov.range === 'custom' && ov.from && ov.to) {
+      return { from: ov.from, to: ov.to };
+    } else {
+      to.setDate(start.getDate() + 13);
+    }
+    return { from: localDate(from), to: localDate(to) };
+  }
+
+  async function renderOverview() {
+    const el = document.getElementById('main-content');
+    const { from, to } = ovPeriod();
+    try {
+      ov.data = await api(`/api/overview?from=${from}&to=${to}`);
+    } catch (err) {
+      el.innerHTML = `<p class="text-red-500">Kunde inte ladda översikten: ${escHtml(err.message)}</p>`;
+      return;
+    }
+    if (!ov.data) return;
+    const cats = [...new Map(ov.data.tasks.filter(t => t.category_id).map(t => [t.category_id, t.category_name])).entries()];
+
+    el.innerHTML = `
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-6">
+        <div>
+          <h2 class="text-2xl font-bold mb-1">Bemanningsöversikt</h2>
+          <p class="text-gray-500 dark:text-gray-400">${formatDate(from)} – ${formatDate(to)} · alla pass och alla personer</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="flex items-center bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5 max-w-full overflow-x-auto">
+            ${OV_RANGES.map(([k, l]) => `<button class="px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap ${ov.range === k ? 'bg-white dark:bg-gray-600 shadow-sm' : 'text-gray-600 dark:text-gray-300'}" onclick="window.FV.ovSetRange('${k}')">${l}</button>`).join('')}
+          </div>
+          ${ov.range === 'custom' ? `
+            <input type="date" class="input w-auto py-1.5" id="ov-from" value="${from}">
+            <span class="text-gray-400">–</span>
+            <input type="date" class="input w-auto py-1.5" id="ov-to" value="${to}">
+            <button class="btn-secondary btn-sm" onclick="window.FV.ovApplyCustom()">Visa</button>` : ''}
+        </div>
+      </div>
+
+      <div id="ov-stats" class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6"></div>
+
+      <div class="grid xl:grid-cols-3 gap-6">
+        <div class="xl:col-span-2 space-y-4">
+          <div class="card p-3 flex flex-col sm:flex-row gap-2 sm:items-center">
+            <input type="text" id="ov-q" class="input sm:max-w-xs" placeholder="Sök person eller pass…" value="${escHtml(ov.q)}" oninput="window.FV.ovFilter()">
+            <select id="ov-cat" class="input sm:max-w-[180px]" onchange="window.FV.ovFilter()">
+              <option value="">Alla kategorier</option>
+              ${cats.map(([id, name]) => `<option value="${id}" ${String(ov.cat) === String(id) ? 'selected' : ''}>${escHtml(name)}</option>`).join('')}
+            </select>
+            <label class="flex items-center gap-2 text-sm sm:ml-2 whitespace-nowrap">
+              <input type="checkbox" id="ov-open" class="rounded" ${ov.onlyOpen ? 'checked' : ''} onchange="window.FV.ovFilter()"> Bara ofullständiga
+            </label>
+            <span class="flex-1"></span>
+            <button class="btn-secondary btn-sm whitespace-nowrap" onclick="window.FV.ovAutoAssign()">⚡ Fördela perioden</button>
+          </div>
+          <div id="ov-board" class="space-y-4"></div>
+        </div>
+
+        <div class="space-y-6">
+          <div class="card p-5" id="ov-attention"></div>
+          <div class="card p-5" id="ov-people"></div>
+        </div>
+      </div>
+    `;
+    ovFilter();
+  }
+
+  function ovTaskState(t) {
+    if (t.status === 'cancelled') return 'cancelled';
+    if (t.overbooked) return 'over';
+    if (t.slots > 0 && t.missing === t.slots) return 'empty';
+    if (t.missing > 0 || t.driver_missing) return 'partial';
+    if (t.slots === 0 && t.filled === 0) return 'empty';
+    return 'full';
+  }
+
+  const OV_STYLE = {
+    full: ['border-l-green-500', 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200', 'Fullt'],
+    partial: ['border-l-amber-500', 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200', 'Saknas'],
+    empty: ['border-l-red-500', 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200', 'Tomt'],
+    over: ['border-l-purple-500', 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200', 'Överbokat'],
+    cancelled: ['border-l-gray-300', 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300', 'Inställt'],
+  };
+
+  function ovSpotChip(sp, q) {
+    const hit = q && sp.user_name && sp.user_name.toLowerCase().includes(q);
+    const base = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs';
+    const ring = hit ? ' ring-2 ring-club-yellow' : '';
+    const label = sp.skoter ? '🛷 ' : '';
+    if (!sp.user_name) {
+      return `<span class="${base} border border-dashed ${sp.skoter ? 'border-blue-300 text-blue-600 dark:text-blue-300' : 'border-gray-300 dark:border-gray-600 text-gray-400'}">${label}${sp.skoter ? 'Skoterförare saknas' : 'Ledig'}</span>`;
+    }
+    const warn = sp.skoter && !sp.has_skoterkort ? ' <span title="Har inte skoterkort">⚠️</span>' : '';
+    const st = sp.status === 'accepted' ? ' ✓' : sp.status === 'done' ? ' ✔' : '';
+    return `<span class="${base}${ring} ${sp.skoter ? 'bg-blue-50 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}" title="${sp.skoter ? 'Skoterförare' : 'Plats'}${sp.status ? ' · ' + sp.status : ''}">${label}${escHtml(sp.user_name)}${st}${warn}</span>`;
+  }
+
+  function ovFilter() {
+    const data = ov.data;
+    if (!data) return;
+    ov.q = (document.getElementById('ov-q')?.value || '').trim();
+    ov.cat = document.getElementById('ov-cat')?.value || '';
+    ov.onlyOpen = !!document.getElementById('ov-open')?.checked;
+    ovSave();
+    const q = ov.q.toLowerCase();
+
+    // Stats always over the whole period (not the filter)
+    const live = data.tasks.filter(t => t.status !== 'cancelled');
+    const totalSpots = live.reduce((s, t) => s + (t.slots || 0), 0);
+    const filledSpots = live.reduce((s, t) => s + Math.min(t.filled, t.slots || t.filled), 0);
+    const missingTasks = live.filter(t => !t.past && (t.missing > 0 || t.driver_missing));
+    const pct = totalSpots ? Math.round(filledSpots / totalSpots * 100) : 100;
+    const stat = (label, value, cls = '', sub = '') => `
+      <div class="card p-4">
+        <p class="text-xs text-gray-500 dark:text-gray-400">${label}</p>
+        <p class="text-2xl font-bold mt-0.5 ${cls}">${value}</p>
+        ${sub ? `<p class="text-xs text-gray-400 mt-0.5">${sub}</p>` : ''}
+      </div>`;
+    document.getElementById('ov-stats').innerHTML = [
+      stat('Pass i perioden', live.length),
+      stat('Bemannade platser', `${filledSpots}/${totalSpots}`, pct === 100 ? 'text-green-600 dark:text-green-400' : 'text-club-yellow dark:text-yellow-400',
+        `<span class="inline-block w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden align-middle"><span class="block h-1.5 ${pct === 100 ? 'bg-green-500' : 'bg-club-yellow'}" style="width:${pct}%"></span></span> ${pct} %`),
+      stat('Pass som saknar folk', missingTasks.filter(t => t.missing > 0).length, missingTasks.some(t => t.missing > 0) ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'),
+      stat('Saknar skoterförare', live.filter(t => !t.past && t.driver_missing).length, live.some(t => !t.past && t.driver_missing) ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'),
+      stat('Överbokade', live.filter(t => t.overbooked).length, live.some(t => t.overbooked) ? 'text-purple-600 dark:text-purple-400' : ''),
+    ].join('');
+
+    // Board, filtered, grouped per day
+    let tasks = data.tasks;
+    if (ov.cat) tasks = tasks.filter(t => String(t.category_id) === String(ov.cat));
+    if (ov.onlyOpen) tasks = tasks.filter(t => ['partial', 'empty', 'over'].includes(ovTaskState(t)));
+    if (q) tasks = tasks.filter(t => t.title.toLowerCase().includes(q) || t.spots.some(s => (s.user_name || '').toLowerCase().includes(q)));
+    const days = {};
+    for (const t of tasks) (days[t.start_datetime.slice(0, 10)] ||= []).push(t);
+    const dayName = d => new Date(d + 'T12:00').toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long' });
+
+    document.getElementById('ov-board').innerHTML = Object.keys(days).length === 0
+      ? `<div class="card p-10 text-center text-gray-400">${data.tasks.length ? 'Inga pass matchar filtret' : 'Inga pass i perioden'}</div>`
+      : Object.entries(days).map(([day, list]) => {
+        const dayMissing = list.reduce((s, t) => s + (t.status === 'cancelled' ? 0 : t.missing), 0);
+        return `
+        <div class="card overflow-hidden">
+          <div class="px-4 py-2 bg-gray-50 dark:bg-gray-700/40 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+            <span class="text-sm font-semibold capitalize">${dayName(day)}</span>
+            <span class="text-xs ${dayMissing ? 'text-red-600 dark:text-red-400 font-medium' : 'text-green-600 dark:text-green-400'}">${dayMissing ? `${dayMissing} plats${dayMissing > 1 ? 'er' : ''} saknas` : '✓ allt bemannat'}</span>
+          </div>
+          <div class="divide-y divide-gray-100 dark:divide-gray-700/60">
+            ${list.map(t => {
+              const state = ovTaskState(t);
+              const [border, badge, label] = OV_STYLE[state];
+              return `
+              <div class="px-4 py-3 border-l-4 ${border} hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer ${t.past ? 'opacity-60' : ''}" onclick="window.FV.showTaskDetail(${t.id})">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${safeColor(t.category_color)}"></span>
+                      <span class="font-medium text-sm">${escHtml(t.title)}</span>
+                      <span class="text-xs text-gray-500 dark:text-gray-400">${formatTime(t.start_datetime)}–${formatTime(t.end_datetime)}${t.location ? ' · ' + escHtml(t.location) : ''}</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 mt-2">
+                      ${t.spots.length ? t.spots.map(sp => ovSpotChip(sp, q)).join('') : '<span class="text-xs text-gray-400">Ingen anmäld</span>'}
+                      ${t.declined.length ? `<span class="text-xs text-gray-400 self-center" title="Har nekat">· nekat: ${escHtml(t.declined.join(', '))}</span>` : ''}
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-end gap-1 flex-shrink-0">
+                    <span class="badge ${badge} text-[11px]">${label}</span>
+                    ${t.slots > 0 ? `<span class="text-xs text-gray-500">${t.filled}/${t.slots}</span>` : ''}
+                  </div>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      }).join('');
+
+    // Needs attention (upcoming, not full)
+    const urgent = missingTasks.sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+    document.getElementById('ov-attention').innerHTML = `
+      <h3 class="font-semibold mb-3">Behöver åtgärd <span class="text-sm font-normal text-gray-400">(${urgent.length})</span></h3>
+      ${urgent.length === 0 ? '<p class="text-sm text-green-600 dark:text-green-400">✓ Alla kommande pass i perioden är bemannade.</p>' : `
+        <ul class="space-y-1.5 max-h-80 overflow-y-auto -mx-2">
+          ${urgent.slice(0, 50).map(t => `
+            <li class="px-2 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer flex items-center justify-between gap-2" onclick="window.FV.showTaskDetail(${t.id})">
+              <span class="min-w-0">
+                <span class="text-sm font-medium block truncate">${escHtml(t.title)}</span>
+                <span class="text-xs text-gray-500">${formatDateTime(t.start_datetime)}</span>
+              </span>
+              <span class="flex flex-col items-end text-xs flex-shrink-0">
+                ${t.missing ? `<span class="text-red-600 dark:text-red-400 font-medium">${t.missing} saknas</span>` : ''}
+                ${t.driver_missing ? '<span class="text-blue-600 dark:text-blue-400">🛷 skoterförare</span>' : ''}
+              </span>
+            </li>`).join('')}
+        </ul>
+        ${urgent.length > 50 ? `<p class="text-xs text-gray-400 mt-2">… och ${urgent.length - 50} till</p>` : ''}`}
+    `;
+
+    // People load in the period
+    const people = [...data.people].sort((a, b) => a.count - b.count || a.name.localeCompare(b.name, 'sv'));
+    const max = Math.max(1, ...people.map(p => p.count));
+    const zero = people.filter(p => p.count === 0).length;
+    document.getElementById('ov-people').innerHTML = `
+      <h3 class="font-semibold mb-1">Pass per person</h3>
+      <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">I perioden · färst först${zero ? ` · <span class="text-red-600 dark:text-red-400">${zero} utan pass</span>` : ''}</p>
+      <ul class="space-y-1.5 max-h-96 overflow-y-auto overflow-x-hidden">
+        ${people.map(p => `
+          <li class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40 rounded px-1 -mx-1" onclick="window.FV.ovSearchPerson(${JSON.stringify(p.name).replace(/"/g, '&quot;')})" title="Visa ${escHtml(p.name)}s pass">
+            <span class="w-32 truncate ${p.count === 0 ? 'text-red-600 dark:text-red-400' : ''}">${escHtml(p.name)}${p.skoterkort ? ' 🛷' : ''}</span>
+            <span class="flex-1 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden"><span class="block h-2 ${p.count === 0 ? '' : 'bg-club-yellow'}" style="width:${Math.round(p.count / max * 100)}%"></span></span>
+            <span class="w-6 text-right text-xs font-medium">${p.count}</span>
+          </li>`).join('')}
+      </ul>
+    `;
+  }
+
+  function ovSetRange(r) { ov.range = r; if (r === 'custom' && !ov.from) Object.assign(ov, ovPeriod(), { range: 'custom' }); ovSave(); renderOverview(); }
+  function ovApplyCustom() {
+    const f = document.getElementById('ov-from').value;
+    const t = document.getElementById('ov-to').value;
+    if (!f || !t || t < f) { toast('Välj ett giltigt datumintervall', 'error'); return; }
+    Object.assign(ov, { from: f, to: t }); ovSave(); renderOverview();
+  }
+  function ovSearchPerson(name) {
+    const el = document.getElementById('ov-q');
+    el.value = el.value === name ? '' : name;
+    // Show all of the person's sessions, not only incomplete ones.
+    const open = document.getElementById('ov-open');
+    if (el.value && open) open.checked = false;
+    ovFilter();
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function ovAutoAssign() {
+    const { from, to } = ovPeriod();
+    aa = Object.assign(aa || {}, { from, to });
+    if (!aa.user_ids) aa.user_ids = (ov.data?.people || []).map(p => p.id);
+    if (aa.max_per_day === undefined) aa.max_per_day = true;
+    openAutoAssign();
+  }
+
+  // ---------------------------------------------------------------------------
   // DASHBOARD
   // ---------------------------------------------------------------------------
   async function renderDashboard() {
+    if (currentUser.role === 'admin') return renderOverview();
     const el = document.getElementById('main-content');
     try {
       const now = new Date();
@@ -2807,6 +3075,11 @@
     filterAudit,
     undoAudit,
     openAutoAssign,
+    ovSetRange,
+    ovApplyCustom,
+    ovFilter,
+    ovSearchPerson,
+    ovAutoAssign,
     aaUpdateCount,
     aaSelectAll,
     aaSaveCategorySkill,
